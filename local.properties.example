@@ -1,0 +1,5 @@
+# Copy this file to local.properties and fill in your values.
+# local.properties is gitignored — never commit it.
+
+# Your Rivium Push API key from https://console.rivium.co
+RIVIUM_PUSH_API_KEY=rv_live_your_key_here

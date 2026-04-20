@@ -1,0 +1,31 @@
+pluginManagement {
+    plugins {
+        id 'com.android.application' version '8.9.1'
+        id 'org.jetbrains.kotlin.android' version '2.1.0'
+    }
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        // Local libs folder for fallback
+        flatDir {
+            dirs("../libs")
+        }
+    }
+}
+
+rootProject.name = "RiviumPushExample"
+
+// SDK modules (pn-protocol is pulled from Maven Central automatically)
+include ':rivium-push'
+project(':rivium-push').projectDir = new File('../rivium-push')
+include ':rivium-push-voip'
+project(':rivium-push-voip').projectDir = new File('../rivium-push-voip')

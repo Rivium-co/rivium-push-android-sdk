@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive files
+*.jks
+*.keystore
+google-services.json
+*.env
+*.env.*
+
+# Build outputs
+*.apk
+*.aab
+mapping.txt
+outputs/

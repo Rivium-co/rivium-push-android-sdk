@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Log levels for settings spinner -->
+    <string-array name="log_levels">
+        <item>DEBUG</item>
+        <item>INFO</item>
+        <item>WARNING</item>
+        <item>ERROR</item>
+        <item>NONE</item>
+    </string-array>
+
+    <!-- Filter options for inbox -->
+    <string-array name="inbox_filters">
+        <item>All</item>
+        <item>Unread</item>
+        <item>Archived</item>
+    </string-array>
+</resources>

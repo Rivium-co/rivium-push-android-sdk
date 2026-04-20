@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rivium Push Example</string>
+
+    <!-- Main Activity -->
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="device_not_registered">Not registered</string>
+
+    <!-- Registration -->
+    <string name="hint_user_id">User ID (optional)</string>
+    <string name="btn_register">Register</string>
+    <string name="btn_unregister">Unregister</string>
+
+    <!-- Topics -->
+    <string name="hint_topic">Topic name</string>
+    <string name="btn_subscribe">Subscribe</string>
+    <string name="btn_unsubscribe">Unsubscribe</string>
+
+    <!-- User ID -->
+    <string name="btn_set_user_id">Set User ID</string>
+    <string name="btn_clear_user_id">Clear User ID</string>
+
+    <!-- Features -->
+    <string name="btn_inbox">Inbox</string>
+    <string name="btn_in_app">In-App Messages</string>
+    <string name="btn_trigger_event">Trigger Event</string>
+    <string name="btn_refresh">Refresh</string>
+
+    <!-- Inbox Activity -->
+    <string name="inbox_title">Inbox</string>
+    <string name="filter_all">All</string>
+    <string name="filter_unread">Unread</string>
+    <string name="filter_archived">Archived</string>
+    <string name="no_messages">No messages</string>
+    <string name="loading">Loading...</string>
+
+    <!-- In-App Activity -->
+    <string name="in_app_title">In-App Messages</string>
+    <string name="hint_event_name">Event name</string>
+    <string name="btn_trigger">Trigger</string>
+    <string name="btn_app_open">App Open</string>
+    <string name="btn_session_start">Session Start</string>
+    <string name="btn_fetch_messages">Fetch Messages</string>
+
+    <!-- Settings Activity -->
+    <string name="settings_title">Settings</string>
+    <string name="hint_api_key">API Key</string>
+    <string name="hint_server_url">Server URL</string>
+    <string name="log_level">Log Level</string>
+    <string name="btn_save">Save</string>
+    <string name="btn_apply">Apply &amp; Reconnect</string>
+    <string name="btn_test_connection">Test Connection</string>
+    <string name="btn_clear_cache">Clear Inbox Cache</string>
+    <string name="btn_clear_all">Clear All Data &amp; Unregister</string>
+
+    <!-- Log Viewer -->
+    <string name="logs_title">Logs</string>
+    <string name="btn_clear">Clear</string>
+    <string name="btn_copy">Copy</string>
+    <string name="btn_share">Share</string>
+    <string name="logs_copied">Logs copied</string>
+    <string name="no_logs">No logs yet</string>
+
+    <!-- Message Detail -->
+    <string name="message_detail_title">Message Detail</string>
+    <string name="deep_link">Deep Link</string>
+    <string name="custom_data">Custom Data</string>
+
+    <!-- Dialogs -->
+    <string name="permission_title">Notification Permission</string>
+    <string name="permission_rationale">This app needs notification permission to receive push notifications. Please grant the permission.</string>
+    <string name="permission_denied_title">Permission Denied</string>
+    <string name="permission_denied_message">Without notification permission, you won\'t receive push notifications. You can enable it in app settings.</string>
+    <string name="btn_grant">Grant</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_ok">OK</string>
+    <string name="btn_details">Details</string>
+
+    <!-- Toasts -->
+    <string name="registered">Registered!</string>
+    <string name="unregistered">Unregistered</string>
+    <string name="enter_topic">Enter a topic name</string>
+    <string name="enter_user_id">Enter a user ID</string>
+    <string name="subscribed_to">Subscribed to: %s</string>
+    <string name="unsubscribed_from">Unsubscribed from: %s</string>
+    <string name="user_id_set">User ID set: %s</string>
+    <string name="user_id_cleared">User ID cleared</string>
+    <string name="event_triggered">Event triggered: %s</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="cache_cleared">Inbox cache cleared</string>
+    <string name="data_cleared">All data cleared</string>
+</resources>
