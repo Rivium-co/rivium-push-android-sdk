@@ -47,8 +47,10 @@ android {
 }
 
 dependencies {
-    // Rivium Push SDK (local modules)
+    // Rivium Push SDK (local module)
     implementation(project(":rivium-push"))
+    // Rivium Push VoIP SDK (Maven Central)
+    implementation("co.rivium:rivium-push-voip:0.1.0")
     // AndroidX
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")

@@ -29,4 +29,5 @@ project(":pn-protocol").projectDir = file("../protocol/pn-protocol-android/pn-pr
 // SDK modules
 include(":rivium-push")
 include(":rivium-push-voip")
+project(":rivium-push-voip").projectDir = file("../rivium-push-voip-android-sdk")
 include(":example")

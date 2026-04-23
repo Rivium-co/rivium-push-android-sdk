@@ -140,6 +140,9 @@ class MainActivity : AppCompatActivity() {
         binding.btnABTesting.setOnClickListener {
             startActivity(Intent(this, ABTestActivity::class.java))
         }
+        binding.btnVoip.setOnClickListener {
+            startActivity(Intent(this, VoipActivity::class.java))
+        }
         binding.btnTriggerEvent.setOnClickListener { triggerCustomEvent() }
 
         // Status

@@ -314,6 +314,14 @@
                         android:text="A/B Testing" />
 
                     <Button
+                        android:id="@+id/btnVoip"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="VoIP Calls" />
+
+                    <Button
                         android:id="@+id/btnTriggerEvent"
                         style="@style/Widget.Material3.Button.OutlinedButton"
                         android:layout_width="match_parent"

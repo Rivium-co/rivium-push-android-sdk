@@ -192,18 +192,48 @@ val count = RiviumPush.getInboxManager().getUnreadCount()
 | `enableAnalytics` | Boolean | true | Send analytics events |
 | `logLevel` | String | "debug" | none, error, warning, info, debug, verbose |
 
-## VoIP Push (Optional)
+## VoIP Calls (Optional)
 
-For VoIP call notifications, add the VoIP module separately:
+For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-push-voip-android-sdk):
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.0")
-    implementation("co.rivium:rivium-push-voip-android:0.1.0") // Optional
+    implementation("co.rivium:rivium-push-android:0.1.1")
+    implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```
 
-The Push SDK works independently without VoIP.
+```kotlin
+import co.rivium.push.voip.RiviumPushVoip
+import co.rivium.push.voip.VoipConfig
+import co.rivium.push.voip.VoipCallback
+
+// Initialize
+RiviumPushVoip.initialize(this, VoipConfig(appName = "MyApp"))
+
+// Handle call events
+RiviumPushVoip.setCallback(object : VoipCallback {
+    override fun onCallAccepted(callData: CallData) {
+        // Connect to your calling service (Jitsi, WebRTC)
+    }
+    override fun onCallDeclined(callData: CallData) { }
+    override fun onCallTimeout(callData: CallData) { }
+})
+```
+
+Send push with `{"type": "voip_call", "callerName": "John"}` to trigger the incoming call screen automatically.
+
+The Push SDK works independently without VoIP. VoIP is only needed for apps with real calling features.
+
+## Example App
+
+The `example/` folder contains a complete demo app with:
+- Push notification receiving
+- In-app message triggers
+- Inbox management
+- A/B test variant assignment
+- VoIP calling (simulate and receive)
+- Settings and debugging tools
 
 ## Links
 
