@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.1")
+    implementation("co.rivium:rivium-push-android:0.1.2")
 }
 ```
 
@@ -198,7 +198,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.1")
+    implementation("co.rivium:rivium-push-android:0.1.2")
     implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```
