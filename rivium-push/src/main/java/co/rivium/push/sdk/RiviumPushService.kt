@@ -269,8 +269,11 @@ class RiviumPushService : Service() {
             // Uses system broadcast so manifest-registered receivers work even in background
             broadcastMessage(payload)
 
-            // Show notification if not silent and (not in foreground OR showNotificationInForeground is true)
-            if (!message.silent) {
+            // Check if this is a VoIP call message — handled by VoIP SDK, skip regular notification
+            val isVoipCall = message.data?.get("type") == "voip_call"
+
+            // Show notification if not silent, not voip_call, and (not in foreground OR showNotificationInForeground is true)
+            if (!message.silent && !isVoipCall) {
                 val isAppInForeground = RiviumPush.getAppState().isInForeground
                 val showInForeground = config?.showNotificationInForeground ?: true
 
@@ -280,6 +283,8 @@ class RiviumPushService : Service() {
                 } else {
                     Log.d(TAG, "Skipping notification - app in foreground and showNotificationInForeground=false")
                 }
+            } else if (isVoipCall) {
+                Log.d(TAG, "VoIP call message - skipping regular notification, handled by VoIP SDK")
             } else {
                 Log.d(TAG, "Silent message - skipping notification")
             }

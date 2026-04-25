@@ -23,3 +23,6 @@ google-services.json
 *.aab
 mapping.txt
 outputs/
+
+# Claude
+.claude/

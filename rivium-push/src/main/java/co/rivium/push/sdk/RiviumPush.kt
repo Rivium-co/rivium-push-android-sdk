@@ -148,6 +148,25 @@ object RiviumPush {
     }
 
     /**
+     * Request notification permission on Android 13+ (API 33+).
+     * Call this from an Activity before or after register().
+     * On older Android versions, this is a no-op (permission is granted at install time).
+     */
+    fun requestNotificationPermission(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    activity,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_REQUEST_CODE
+                )
+            }
+        }
+    }
+
+    /**
      * Register device and start push service
      */
     fun register(userId: String? = null, metadata: Map<String, Any>? = null) {
