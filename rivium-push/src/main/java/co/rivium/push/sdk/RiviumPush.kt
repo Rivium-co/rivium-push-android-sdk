@@ -52,6 +52,8 @@ object RiviumPush {
     private const val TAG = "RiviumPush"
     private const val PREFS_NAME = "rivium_push_prefs"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_SUBSCRIPTION_ID = "subscription_id"
+    private const val KEY_USER_ID = "user_id"
     private const val KEY_SERVICE_ENABLED = "service_enabled"
     private const val KEY_APP_VERSION = "app_version"
 
@@ -62,6 +64,7 @@ object RiviumPush {
     private var apiClient: ApiClient? = null
     private var callback: RiviumPushCallback? = null
     private var deviceId: String? = null
+    private var subscriptionId: String? = null
     private var appId: String? = null
     private var currentUserId: String? = null
     private var notificationPermissionRequested = false
@@ -74,6 +77,15 @@ object RiviumPush {
         this.config = config
         this.apiClient = ApiClient(config)
         this.deviceId = getOrCreateDeviceId(context)
+
+        // Restore previously-issued subscriptionId so the foreground service can
+        // subscribe to the new topic immediately on boot — register() will refresh it.
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        this.subscriptionId = prefs.getString(KEY_SUBSCRIPTION_ID, null)
+        // Restore the userId set in a previous session so inbox queries hit the
+        // right backend rows immediately on app launch (without requiring the
+        // host app to call setUserId on every cold start).
+        this.currentUserId = prefs.getString(KEY_USER_ID, null)
 
         // Use API key hash as app ID for pn-protocol topics
         this.appId = config.apiKey.take(16)
@@ -167,7 +179,11 @@ object RiviumPush {
     }
 
     /**
-     * Register device and start push service
+     * Register device and start push service.
+     *
+     * If [userId] is null, the SDK falls back to the persisted userId from a
+     * previous session (matches OneSignal/Airship). Pass an explicit userId
+     * only when associating a new identity. Use [clearUserId] to dissociate.
      */
     fun register(userId: String? = null, metadata: Map<String, Any>? = null) {
         val ctx = context ?: throw IllegalStateException("RiviumPush not initialized")
@@ -175,7 +191,12 @@ object RiviumPush {
         val client = apiClient ?: throw IllegalStateException("RiviumPush not initialized")
         val devId = deviceId ?: throw IllegalStateException("Device ID not available")
 
-        Log.d(TAG, "Registering device: $devId, userId: $userId")
+        // Fall back to the previously-persisted userId so the host app can
+        // call register() on every launch without forgetting the user identity.
+        val effectiveUserId = userId ?: currentUserId
+
+        Log.d(TAG, "Registering device: $devId, userId: $effectiveUserId" +
+                if (userId == null && effectiveUserId != null) " (restored from previous session)" else "")
 
         // Fetch push config from server if not already fetched
         if (!cfg.hasPushConfig()) {
@@ -185,7 +206,7 @@ object RiviumPush {
                     Log.d(TAG, "Push config fetched: host=${pushConfig.host}, port=${pushConfig.port}")
                     cfg.updatePushConfig(host = pushConfig.host, port = pushConfig.port, username = pushConfig.username, password = pushConfig.password)
                     // Now proceed with registration
-                    doRegister(ctx, cfg, client, devId, userId, metadata)
+                    doRegister(ctx, cfg, client, devId, effectiveUserId, metadata)
                 }
 
                 override fun onError(error: String) {
@@ -196,7 +217,7 @@ object RiviumPush {
             })
         } else {
             // Push config already available, proceed with registration
-            doRegister(ctx, cfg, client, devId, userId, metadata)
+            doRegister(ctx, cfg, client, devId, effectiveUserId, metadata)
         }
     }
 
@@ -223,6 +244,16 @@ object RiviumPush {
                     Log.d(TAG, "Using server-provided appId: $appId")
                     // Save appId for boot recovery
                     saveAppId(ctx, response.appId)
+                }
+
+                // Capture subscriptionId — the per-install UUID — and persist it.
+                if (!response.subscriptionId.isNullOrEmpty()) {
+                    subscriptionId = response.subscriptionId
+                    ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_SUBSCRIPTION_ID, response.subscriptionId)
+                        .apply()
+                    Log.d(TAG, "Stored subscriptionId: ${response.subscriptionId}")
                 }
 
                 // Update PN Protocol config from registration response (includes JWT token and TLS setting)
@@ -299,16 +330,25 @@ object RiviumPush {
     }
 
     /**
-     * Set user ID for the current device
+     * Set user ID for the current device.
+     *
+     * Persisted across app launches (matches OneSignal/Airship behaviour) so
+     * inbox queries and any future user-scoped APIs hit the right backend rows
+     * immediately on cold start. Call [clearUserId] on logout to wipe it.
      */
     fun setUserId(userId: String) {
+        val ctx = context ?: throw IllegalStateException("RiviumPush not initialized")
         val client = apiClient ?: throw IllegalStateException("RiviumPush not initialized")
         val devId = deviceId ?: throw IllegalStateException("Device ID not available")
 
         Log.d(TAG, "Setting user ID: $userId")
 
-        // Store userId locally
+        // Store userId locally and persist for next launch
         currentUserId = userId
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_USER_ID, userId)
+            .apply()
 
         // Update InboxManager
         inboxManager?.setUserId(userId)
@@ -326,16 +366,21 @@ object RiviumPush {
     }
 
     /**
-     * Clear user ID for the current device
+     * Clear user ID for the current device. Call this on logout.
      */
     fun clearUserId() {
+        val ctx = context ?: throw IllegalStateException("RiviumPush not initialized")
         val client = apiClient ?: throw IllegalStateException("RiviumPush not initialized")
         val devId = deviceId ?: throw IllegalStateException("Device ID not available")
 
         Log.d(TAG, "Clearing user ID")
 
-        // Clear userId locally
+        // Clear userId locally and on disk
         currentUserId = null
+        ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_USER_ID)
+            .apply()
 
         // Update InboxManager
         inboxManager?.setUserId(null)
@@ -351,6 +396,11 @@ object RiviumPush {
             }
         })
     }
+
+    /**
+     * Get the currently-stored userId, if any. Survives app restarts.
+     */
+    fun getUserId(): String? = currentUserId
 
     /**
      * Get the message that launched the app (when user tapped a notification)
@@ -381,6 +431,7 @@ object RiviumPush {
         RiviumPushService.appId = appId
         RiviumPushService.deviceId = deviceId
         RiviumPushService.appIdentifier = context.packageName
+        RiviumPushService.subscriptionId = subscriptionId
         RiviumPushService.callback = callback
 
         val intent = Intent(context, RiviumPushService::class.java)
@@ -413,6 +464,13 @@ object RiviumPush {
      * Get current device ID
      */
     fun getDeviceId(): String? = deviceId
+
+    /**
+     * Get the per-install subscription ID issued by the server during register().
+     * This is the canonical addressing key for inbox/A-B/in-app calls and the new
+     * MQTT topic. Returns null until register() succeeds.
+     */
+    fun getSubscriptionId(): String? = subscriptionId
 
     @SuppressLint("HardwareIds")
     private fun getOrCreateDeviceId(context: Context): String {

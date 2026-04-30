@@ -42,6 +42,7 @@ class ApiClient(private val config: RiviumPushConfig) {
 
     data class RegisterResponse(
         val deviceId: String,
+        val subscriptionId: String? = null, // Backend-issued per-install UUID, addressing key for new SDK builds
         val appId: String? = null, // App ID from server (first 16 chars of projectId)
         val appIdentifier: String? = null, // App identifier for per-app message routing
         val message: String? = null,

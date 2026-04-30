@@ -29,6 +29,7 @@ class RiviumPushService : Service() {
         internal var appId: String? = null
         internal var deviceId: String? = null
         internal var appIdentifier: String? = null
+        internal var subscriptionId: String? = null
         internal var callback: RiviumPushCallback? = null
 
         private var serviceStartCount = 0
@@ -103,10 +104,12 @@ class RiviumPushService : Service() {
             val currentAppId = existingManager?.appId
             val currentDeviceId = existingManager?.deviceId
             val currentAppIdentifier = existingManager?.appIdentifier
+            val currentSubscriptionId = existingManager?.subscriptionId
             val parametersChanged = existingManager != null && (
                 currentAppId != safeAppId ||
                 currentDeviceId != safeDeviceId ||
-                currentAppIdentifier != (Companion.appIdentifier ?: "_default")
+                currentAppIdentifier != (Companion.appIdentifier ?: "_default") ||
+                currentSubscriptionId != Companion.subscriptionId
             )
 
             if (parametersChanged) {
@@ -149,7 +152,8 @@ class RiviumPushService : Service() {
 
                     socketManager = PNSocketManager(
                         this, safeConfig, safeAppId, safeDeviceId,
-                        Companion.appIdentifier ?: "_default"
+                        Companion.appIdentifier ?: "_default",
+                        Companion.subscriptionId,
                     )
                     setupCallbacks()
                     setupNetworkMonitor()

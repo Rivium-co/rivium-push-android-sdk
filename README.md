@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.2")
+    implementation("co.rivium:rivium-push-android:0.1.3")
 }
 ```
 

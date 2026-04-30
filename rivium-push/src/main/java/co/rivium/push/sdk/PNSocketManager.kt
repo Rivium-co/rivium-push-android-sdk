@@ -2,6 +2,7 @@ package co.rivium.push.sdk
 
 import android.content.Context
 import co.rivium.protocol.*
+import org.json.JSONObject
 
 /**
  * Manager that wraps PNSocket for the Rivium Push SDK.
@@ -12,7 +13,8 @@ class PNSocketManager(
     private val config: RiviumPushConfig,
     internal val appId: String,
     internal val deviceId: String,
-    internal val appIdentifier: String = "_default"
+    internal val appIdentifier: String = "_default",
+    internal val subscriptionId: String? = null,
 ) {
     companion object {
         private const val TAG = "PNSocket"
@@ -174,18 +176,35 @@ class PNSocketManager(
     }
 
     private fun subscribeToChannels() {
-        val deviceChannel = "rivium_push/$appId/$deviceId/$appIdentifier"
+        // Per-install subscription topic — primary delivery channel for every
+        // device-targeted message after the subscriptionId migration.
+        val subscriptionChannel = subscriptionId?.let { "rivium_push/$appId/sub/$it" }
         val broadcastChannel = "rivium_push/$appId/broadcast"
 
-        Log.d(TAG, "Subscribing to channels: $deviceChannel, $broadcastChannel")
+        // DEPRECATED: legacy device-scoped topic. The backend stopped publishing
+        // here after the subscriptionId migration. Kept subscribed only to keep
+        // older test builds / out-of-tree backends working; will be removed in a
+        // future SDK release.
+        @Suppress("DEPRECATION")
+        val deviceChannel = "rivium_push/$appId/$deviceId/$appIdentifier"
 
-        socket?.stream(deviceChannel, PNDeliveryMode.RELIABLE) { message ->
-            Log.d(TAG, "Message received on $deviceChannel")
-            handleMessage(message)
+        Log.d(TAG, "Subscribing to channels: ${subscriptionChannel ?: "<no sub yet>"}, $broadcastChannel, $deviceChannel (deprecated)")
+
+        if (subscriptionChannel != null) {
+            socket?.stream(subscriptionChannel, PNDeliveryMode.RELIABLE) { message ->
+                Log.d(TAG, "Message received on $subscriptionChannel")
+                handleMessage(message)
+            }
         }
 
         socket?.stream(broadcastChannel, PNDeliveryMode.RELIABLE) { message ->
             Log.d(TAG, "Message received on $broadcastChannel")
+            handleMessage(message)
+        }
+
+        // Legacy stream — DEPRECATED, see comment above.
+        socket?.stream(deviceChannel, PNDeliveryMode.RELIABLE) { message ->
+            Log.d(TAG, "Message received on (deprecated) $deviceChannel")
             handleMessage(message)
         }
     }
