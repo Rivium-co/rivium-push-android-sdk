@@ -35,6 +35,8 @@ class NotificationHelper(
         const val EXTRA_ACTION_ID = "action_id"
         const val EXTRA_MESSAGE_ID = "message_id"
         const val EXTRA_DEEP_LINK = "deep_link"
+        const val EXTRA_RIVIUM_NOTIFICATION_TAP = "rivium_notification_tap"
+        const val EXTRA_MESSAGE_JSON = "rivium_message_json"
 
         /**
          * Get the message that launched the app (when user tapped a notification)
@@ -187,27 +189,32 @@ class NotificationHelper(
         val abTestId = message.data?.get("abTestId")?.toString()
         val variantId = message.data?.get("variantId")?.toString()
 
-        // Always route through receiver so we can properly store the initial message
-        // when the notification is tapped (not when it's displayed)
+        // Launch the host app's activity directly with PendingIntent.getActivity.
+        // Going through a BroadcastReceiver + startActivity hits Android 10+
+        // background-activity-launch restrictions when the user taps the
+        // notification from the shade after a delay, silently dropping the launch.
         val messageJson = com.google.gson.Gson().toJson(message.toMap())
-        val clickIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-            action = ACTION_BUTTON_CLICKED
-            putExtra(EXTRA_ACTION_ID, "notification_tap") // Special ID for main notification tap
-            putExtra(EXTRA_MESSAGE_ID, message.messageId)
-            putExtra(EXTRA_DEEP_LINK, message.deepLink)
-            putExtra("message_json", messageJson) // Pass full message for getInitialMessage()
-            // Pass A/B test data if present
-            abTestId?.let { putExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID, it) }
-            variantId?.let { putExtra(NotificationActionReceiver.EXTRA_VARIANT_ID, it) }
-            // Pass custom data as well
-            message.data?.forEach { (key, value) ->
-                putExtra("data_$key", value.toString())
-            }
-        }
-        val pendingIntent = PendingIntent.getBroadcast(
+        val launchIntent = context.packageManager
+            .getLaunchIntentForPackage(context.packageName)
+            ?.apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                putExtra(EXTRA_RIVIUM_NOTIFICATION_TAP, true)
+                putExtra(EXTRA_MESSAGE_ID, message.messageId)
+                putExtra(EXTRA_DEEP_LINK, message.deepLink)
+                putExtra(EXTRA_MESSAGE_JSON, messageJson)
+                abTestId?.let { putExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID, it) }
+                variantId?.let { putExtra(NotificationActionReceiver.EXTRA_VARIANT_ID, it) }
+                message.data?.forEach { (key, value) ->
+                    putExtra("data_$key", value.toString())
+                }
+            } ?: Intent()
+
+        val pendingIntent = PendingIntent.getActivity(
             context,
             currentNotificationId,
-            clickIntent,
+            launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 

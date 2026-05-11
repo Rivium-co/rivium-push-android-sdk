@@ -426,6 +426,74 @@ object RiviumPush {
         return NotificationHelper.getClickedAction(ctx)
     }
 
+    /**
+     * Inspect an Activity intent for a notification tap and, if found, fire the
+     * onNotificationTapped callback, track the A/B click, and (when no live
+     * callback is registered yet) store it as the initial message.
+     *
+     * Call this from your Activity's onCreate and onNewIntent so taps from the
+     * status-bar shade — which launch the activity via PendingIntent.getActivity
+     * to avoid Android 10+ background-launch restrictions — are delivered to
+     * your app. The Flutter plugin invokes this automatically.
+     *
+     * The relevant extra is consumed so repeated calls on the same intent are
+     * safe; returns true if a tap was processed.
+     */
+    fun handleNotificationIntent(intent: Intent?): Boolean {
+        val ctx = context ?: return false
+        if (intent == null) return false
+        if (!intent.getBooleanExtra(NotificationHelper.EXTRA_RIVIUM_NOTIFICATION_TAP, false)) {
+            return false
+        }
+        // Consume so onNewIntent re-deliveries (config changes etc.) don't refire.
+        intent.removeExtra(NotificationHelper.EXTRA_RIVIUM_NOTIFICATION_TAP)
+
+        val messageJson = intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_JSON)
+        val abTestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID)
+        val variantId = intent.getStringExtra(NotificationActionReceiver.EXTRA_VARIANT_ID)
+
+        // Best-effort A/B click tracking (no-op if the IDs are absent).
+        if (!abTestId.isNullOrBlank() && !variantId.isNullOrBlank()) {
+            try {
+                getABTestingManager().trackClicked(
+                    testId = abTestId,
+                    variantId = variantId,
+                    onSuccess = { Log.d(TAG, "A/B click tracked from tap intent") },
+                    onError = { err -> Log.e(TAG, "A/B click track failed: $err") }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "A/B click tracking threw: ${e.message}")
+            }
+        }
+
+        if (messageJson.isNullOrBlank()) return true
+
+        val message = try {
+            val map = com.google.gson.Gson().fromJson(
+                messageJson,
+                object : com.google.gson.reflect.TypeToken<Map<String, Any?>>() {}.type
+            ) as? Map<String, Any?>
+            map?.let { RiviumPushMessage.fromMap(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse tapped message JSON: ${e.message}")
+            null
+        } ?: return true
+
+        val cb = callback
+        if (cb != null) {
+            // Deliver on the main thread for parity with the receiver path.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                cb.onNotificationTapped(message)
+            }
+        } else {
+            // No callback yet — store so getInitialMessage() can pick it up.
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString("initial_message", messageJson)
+                .apply()
+        }
+        return true
+    }
+
     private fun startService(context: Context, config: RiviumPushConfig) {
         RiviumPushService.config = config
         RiviumPushService.appId = appId
@@ -760,6 +828,8 @@ object RiviumPush {
         // Request notification permission when activity becomes available
         if (activity != null) {
             requestNotificationPermissionIfNeeded(activity)
+            // Pick up any tap that launched (or re-entered) the activity.
+            handleNotificationIntent(activity.intent)
         }
     }
 
