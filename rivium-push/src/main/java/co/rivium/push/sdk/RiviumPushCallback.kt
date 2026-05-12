@@ -81,6 +81,19 @@ interface RiviumPushCallback {
     fun onNotificationTapped(message: RiviumPushMessage) {
         // Default: no-op
     }
+
+    /**
+     * Called when the user taps an action button on a notification.
+     * Distinct from `onNotificationTapped`, which fires only for taps on
+     * the notification body. Receives the full message so the host app
+     * can route the action using `data`.
+     * @param message The notification the action button belongs to
+     * @param actionId The id of the action button (matches the `id`
+     *   field of the corresponding NotificationAction in the message)
+     */
+    fun onNotificationAction(message: RiviumPushMessage, actionId: String) {
+        // Default: no-op
+    }
 }
 
 /**
@@ -100,4 +113,5 @@ open class RiviumPushCallbackAdapter : RiviumPushCallback {
     override fun onAppStateChanged(isInForeground: Boolean) {}
     override fun onAppUpdated(previousVersion: String, currentVersion: String, needsReregistration: Boolean) {}
     override fun onNotificationTapped(message: RiviumPushMessage) {}
+    override fun onNotificationAction(message: RiviumPushMessage, actionId: String) {}
 }

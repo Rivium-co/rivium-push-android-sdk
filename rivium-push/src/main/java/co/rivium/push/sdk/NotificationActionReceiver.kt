@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.core.app.NotificationManagerCompat
 import co.rivium.push.sdk.abtesting.ABTestingManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -170,7 +171,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
             val deepLink = intent.getStringExtra(NotificationHelper.EXTRA_DEEP_LINK)
             val abTestId = intent.getStringExtra(EXTRA_AB_TEST_ID)
             val variantId = intent.getStringExtra(EXTRA_VARIANT_ID)
-            val messageJson = intent.getStringExtra("message_json")
+            val messageJson = intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_JSON)
+            val notificationId = intent.getIntExtra(NotificationHelper.EXTRA_NOTIFICATION_ID, -1)
 
             val isMainNotificationTap = actionId == "notification_tap"
 
@@ -230,6 +232,32 @@ class NotificationActionReceiver : BroadcastReceiver() {
                     .putString("clicked_message_id", messageId)
                     .putString("clicked_deep_link", deepLink)
                     .apply()
+
+                // Notify the in-process callback when the SDK is alive.
+                // The host app needs the full message so it can route the
+                // action using fields from `data` (the action button only
+                // carries the actionId; everything else lives on the
+                // message). Action buttons also launch the app via
+                // createLaunchIntent below, but the callback fires
+                // immediately so foreground apps don't wait for it.
+                val callback = RiviumPushService.callback
+                if (callback != null && !actionId.isNullOrBlank() && !messageJson.isNullOrBlank()) {
+                    try {
+                        val map = com.google.gson.Gson().fromJson(
+                            messageJson,
+                            object : com.google.gson.reflect.TypeToken<Map<String, Any?>>() {}.type
+                        ) as? Map<String, Any?>
+                        val riviumPushMessage = map?.let { RiviumPushMessage.fromMap(it) }
+                        if (riviumPushMessage != null) {
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                callback.onNotificationAction(riviumPushMessage, actionId)
+                            }
+                            Log.d(TAG, "Notified callback about action button: $actionId")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to deliver action callback: ${e.message}")
+                    }
+                }
             }
 
             // Launch the app
@@ -260,6 +288,18 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         putExtra(NotificationHelper.EXTRA_DEEP_LINK, deepLink)
                     }
                     fallbackIntent?.let { context.startActivity(it) }
+                }
+            }
+
+            // Auto-dismiss — once the user has tapped a
+            // button, the notification has served its purpose. (Main-body
+            // taps are already auto-cancelled via setAutoCancel(true).)
+            if (!isMainNotificationTap && notificationId != -1) {
+                try {
+                    NotificationManagerCompat.from(context).cancel(notificationId)
+                    Log.d(TAG, "Dismissed notification id=$notificationId after action tap")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to dismiss notification id=$notificationId: ${e.message}")
                 }
             }
 

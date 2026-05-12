@@ -37,6 +37,7 @@ class NotificationHelper(
         const val EXTRA_DEEP_LINK = "deep_link"
         const val EXTRA_RIVIUM_NOTIFICATION_TAP = "rivium_notification_tap"
         const val EXTRA_MESSAGE_JSON = "rivium_message_json"
+        const val EXTRA_NOTIFICATION_ID = "rivium_notification_id"
 
         /**
          * Get the message that launched the app (when user tapped a notification)
@@ -262,6 +263,13 @@ class NotificationHelper(
                 putExtra(EXTRA_ACTION_ID, action.id)
                 putExtra(EXTRA_MESSAGE_ID, message.messageId)
                 putExtra(EXTRA_DEEP_LINK, action.action ?: message.deepLink)
+                // Notification id so the receiver can auto-dismiss after
+                putExtra(EXTRA_NOTIFICATION_ID, currentNotificationId)
+                // Forward the full message JSON so the receiver can deliver
+                // `data` to the action-callback in the host app. Without
+                // this, tapping a button delivers actionId only and the
+                // app can't route the action (e.g. a "Stop" button needs
+                putExtra(EXTRA_MESSAGE_JSON, messageJson)
                 // Pass A/B test IDs for automatic click tracking
                 message.data?.get("abTestId")?.toString()?.let { putExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID, it) }
                 message.data?.get("variantId")?.toString()?.let { putExtra(NotificationActionReceiver.EXTRA_VARIANT_ID, it) }
