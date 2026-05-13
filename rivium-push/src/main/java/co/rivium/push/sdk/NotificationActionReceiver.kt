@@ -233,13 +233,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                     .putString("clicked_deep_link", deepLink)
                     .apply()
 
-                // Notify the in-process callback when the SDK is alive.
-                // The host app needs the full message so it can route the
-                // action using fields from `data` (the action button only
-                // carries the actionId; everything else lives on the
-                // message). Action buttons also launch the app via
-                // createLaunchIntent below, but the callback fires
-                // immediately so foreground apps don't wait for it.
+                // Fire the in-process callback so foreground apps don't
+                // have to wait for createLaunchIntent below.
                 val callback = RiviumPushService.callback
                 if (callback != null && !actionId.isNullOrBlank() && !messageJson.isNullOrBlank()) {
                     try {
@@ -291,9 +286,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 }
             }
 
-            // Auto-dismiss — once the user has tapped a
-            // button, the notification has served its purpose. (Main-body
-            // taps are already auto-cancelled via setAutoCancel(true).)
+            // Auto-dismiss action-button taps. Body taps are already
+            // auto-cancelled via setAutoCancel(true).
             if (!isMainNotificationTap && notificationId != -1) {
                 try {
                     NotificationManagerCompat.from(context).cancel(notificationId)

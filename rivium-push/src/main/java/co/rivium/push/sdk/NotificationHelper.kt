@@ -9,6 +9,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -29,8 +30,13 @@ class NotificationHelper(
 ) {
     companion object {
         private const val TAG = "Notification"
-        private const val CHANNEL_ID = "rivium_push_channel"
-        private const val SERVICE_CHANNEL_ID = "rivium_push_service_channel"
+        private const val CHANNEL_SCHEMA_VERSION = 7
+        private const val CHANNEL_ID = "rivium_push_v${CHANNEL_SCHEMA_VERSION}_default"
+        private const val SERVICE_CHANNEL_ID = "rivium_push_v${CHANNEL_SCHEMA_VERSION}_service"
+        private val LEGACY_CHANNEL_IDS = listOf(
+            "rivium_push_channel", "rivium_push_service_channel",
+            "rivium_push_v2_default", "rivium_push_v2_service",
+        )
         const val ACTION_BUTTON_CLICKED = "co.rivium.push.ACTION_CLICKED"
         const val EXTRA_ACTION_ID = "action_id"
         const val EXTRA_MESSAGE_ID = "message_id"
@@ -118,7 +124,19 @@ class NotificationHelper(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(NotificationManager::class.java)
 
-            // Push notifications channel
+            LEGACY_CHANNEL_IDS.forEach { runCatching { manager.deleteNotificationChannel(it) } }
+            manager.notificationChannels
+                .filter {
+                    it.id.startsWith("rivium_push_") &&
+                        !it.id.startsWith("rivium_push_v${CHANNEL_SCHEMA_VERSION}_")
+                }
+                .forEach { runCatching { manager.deleteNotificationChannel(it.id) } }
+
+            val defaultSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 config.notificationChannelName,
@@ -126,10 +144,10 @@ class NotificationHelper(
             ).apply {
                 description = "Push notifications"
                 enableVibration(true)
+                setSound(defaultSoundUri, audioAttributes)
             }
             manager.createNotificationChannel(channel)
 
-            // Service channel - use MIN importance when hiding notification
             val serviceImportance = if (config.showServiceNotification) {
                 NotificationManager.IMPORTANCE_LOW
             } else {
@@ -263,12 +281,10 @@ class NotificationHelper(
                 putExtra(EXTRA_ACTION_ID, action.id)
                 putExtra(EXTRA_MESSAGE_ID, message.messageId)
                 putExtra(EXTRA_DEEP_LINK, action.action ?: message.deepLink)
-                // Notification id so the receiver can auto-dismiss after
+                // Receiver uses this to auto-dismiss after the action fires.
                 putExtra(EXTRA_NOTIFICATION_ID, currentNotificationId)
-                // Forward the full message JSON so the receiver can deliver
-                // `data` to the action-callback in the host app. Without
-                // this, tapping a button delivers actionId only and the
-                // app can't route the action (e.g. a "Stop" button needs
+                // Full message so the receiver can deliver `data` to the
+                // action-callback (action button alone carries only actionId).
                 putExtra(EXTRA_MESSAGE_JSON, messageJson)
                 // Pass A/B test IDs for automatic click tracking
                 message.data?.get("abTestId")?.toString()?.let { putExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID, it) }
@@ -289,23 +305,20 @@ class NotificationHelper(
             builder.addAction(actionIcon, action.title, actionPendingIntent)
         }
 
-        // Set sound
-        if (message.sound == "default") {
-            builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
-        } else if (!message.sound.isNullOrEmpty()) {
-            // Custom sound from app's res/raw/ folder
-            val soundResId = context.resources.getIdentifier(
-                message.sound, "raw", context.packageName
-            )
-            if (soundResId != 0) {
-                val soundUri = Uri.parse(
-                    "${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/$soundResId"
-                )
-                builder.setSound(soundUri)
-                Log.d(TAG, "Custom sound set: ${message.sound}")
-            } else {
-                Log.w(TAG, "Custom sound '${message.sound}' not found in res/raw/, using default")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            if (message.sound.isNullOrEmpty() || message.sound == "default") {
                 builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
+            } else {
+                val soundResId = context.resources.getIdentifier(
+                    message.sound, "raw", context.packageName
+                )
+                if (soundResId != 0) {
+                    builder.setSound(
+                        Uri.parse("${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/raw/${message.sound}")
+                    )
+                } else {
+                    builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
+                }
             }
         }
 
@@ -322,38 +335,25 @@ class NotificationHelper(
         }
     }
 
-    /**
-     * Get or create a notification channel for the given sound.
-     * On Android 8+, notification sound is controlled by the channel, not the builder.
-     * Returns the appropriate channel ID.
-     */
     private fun getOrCreateSoundChannel(sound: String?): String {
-        // No custom sound or "default" — use the standard channel
-        if (sound.isNullOrEmpty() || sound == "default") {
-            return CHANNEL_ID
-        }
+        if (sound.isNullOrEmpty() || sound == "default") return CHANNEL_ID
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return CHANNEL_ID
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return CHANNEL_ID
-        }
-
-        // Look up the raw resource
         val soundResId = context.resources.getIdentifier(sound, "raw", context.packageName)
         if (soundResId == 0) {
             Log.w(TAG, "Sound '$sound' not found in res/raw/, using default channel")
             return CHANNEL_ID
         }
 
-        val customChannelId = "rivium_push_sound_$sound"
+        val customChannelId = "rivium_push_v${CHANNEL_SCHEMA_VERSION}_sound_$sound"
         val manager = context.getSystemService(NotificationManager::class.java)
 
-        // Only create if it doesn't exist yet
         if (manager.getNotificationChannel(customChannelId) == null) {
             val soundUri = Uri.parse(
-                "${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/$soundResId"
+                "${ContentResolver.SCHEME_ANDROID_RESOURCE}://${context.packageName}/raw/$sound"
             )
+
             val audioAttributes = AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                 .build()
 
@@ -367,7 +367,6 @@ class NotificationHelper(
                 setSound(soundUri, audioAttributes)
             }
             manager.createNotificationChannel(channel)
-            Log.d(TAG, "Created custom sound channel: $customChannelId")
         }
 
         return customChannelId
