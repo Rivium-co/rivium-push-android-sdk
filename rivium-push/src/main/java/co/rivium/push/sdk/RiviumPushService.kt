@@ -83,26 +83,17 @@ class RiviumPushService : Service() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // Android 14+ (API 34): specialUse is the correct FGS type for a
-            // long-running push connection. dataSync is disallowed from
-            // BOOT_COMPLETED on Android 15+ (crashed with
-            // ForegroundServiceStartNotAllowedException). Manifest declares
-            // FOREGROUND_SERVICE_SPECIAL_USE permission + a SPECIAL_USE_FGS_SUBTYPE
-            // property with the reason Google Play reviews on submission.
+            // long-running push connection. Manifest declares specialUse +
+            // SPECIAL_USE_FGS_SUBTYPE reason Google Play reviews on submission.
             startForeground(
                 NOTIFICATION_ID,
                 notification,
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10–13: specialUse type doesn't exist yet, dataSync is
-            // fine and BOOT_COMPLETED restriction doesn't apply on these
-            // versions.
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
         } else {
+            // Android <14: specialUse type doesn't exist on the OS, so the
+            // manifest attribute is ignored. Call startForeground with no type
+            // flag — passing a type here would fail the "subset" check.
             startForeground(NOTIFICATION_ID, notification)
         }
 

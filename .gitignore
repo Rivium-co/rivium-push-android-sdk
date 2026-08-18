@@ -26,3 +26,11 @@ outputs/
 
 # Claude
 .claude/
+
+# Local Gradle user home under example/
+example/.tmp/
+example/caches/
+example/daemon/
+example/native/
+example/wrapper/
+example/notifications/
