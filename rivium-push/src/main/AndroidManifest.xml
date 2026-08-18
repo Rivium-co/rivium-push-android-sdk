@@ -6,7 +6,14 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!--
+        Android 15+ disallows starting a `dataSync` foreground service from
+        BOOT_COMPLETED (ForegroundServiceStartNotAllowedException). `specialUse`
+        is Google's carved-out category for long-running push connections —
+        same type Firebase/OneSignal use. Google Play reviews the
+        SPECIAL_USE_FGS_SUBTYPE reason declared below on submission.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
@@ -14,7 +21,11 @@
         <service
             android:name="co.rivium.push.sdk.RiviumPushService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Long-running MQTT push notification connection to Rivium Push (rivium.co) — keeps the device subscribed for real-time messages when the app is backgrounded, matches the behavior of Firebase Cloud Messaging and OneSignal." />
+        </service>
 
         <!-- Boot Receiver to restart service -->
         <receiver
