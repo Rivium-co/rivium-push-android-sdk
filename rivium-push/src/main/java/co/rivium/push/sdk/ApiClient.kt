@@ -28,7 +28,16 @@ class ApiClient(private val config: RiviumPushConfig) {
         val platform: String = "android",
         val userId: String? = null,
         val metadata: Map<String, Any>? = null,
-        val appIdentifier: String? = null
+        val appIdentifier: String? = null,
+        // Auto-captured device attributes — sent as top-level fields so the
+        // dashboard's segment builder can filter on them as preset fields.
+        // Nullable for backward compat with older SDK / server pairings.
+        val appVersion: String? = null,
+        val osVersion: String? = null,
+        val deviceModel: String? = null,
+        val language: String? = null,
+        val country: String? = null,
+        val timezone: String? = null
     )
 
     data class PNConnectionConfig(
@@ -62,13 +71,25 @@ class ApiClient(private val config: RiviumPushConfig) {
         userId: String? = null,
         metadata: Map<String, Any>? = null,
         appIdentifier: String? = null,
+        appVersion: String? = null,
+        osVersion: String? = null,
+        deviceModel: String? = null,
+        language: String? = null,
+        country: String? = null,
+        timezone: String? = null,
         callback: ApiCallback<RegisterResponse>
     ) {
         val request = RegisterRequest(
             deviceId = deviceId,
             userId = userId,
             metadata = metadata,
-            appIdentifier = appIdentifier
+            appIdentifier = appIdentifier,
+            appVersion = appVersion,
+            osVersion = osVersion,
+            deviceModel = deviceModel,
+            language = language,
+            country = country,
+            timezone = timezone
         )
 
         val body = gson.toJson(request).toRequestBody(jsonMediaType)

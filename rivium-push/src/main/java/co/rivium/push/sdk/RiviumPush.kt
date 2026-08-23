@@ -234,7 +234,23 @@ object RiviumPush {
 
         // Register with server (pass packageName as appIdentifier for per-app isolation)
         val appIdentifier = ctx.packageName
-        client.registerDevice(devId, userId, metadata, appIdentifier, object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
+
+        // Auto-captured device attributes — sent as top-level fields so the
+        // dashboard can offer typed segment filters (appVersion >, country =).
+        val attrs = captureDeviceAttributes(ctx)
+
+        client.registerDevice(
+            devId,
+            userId,
+            metadata,
+            appIdentifier,
+            appVersion = attrs.appVersion,
+            osVersion = attrs.osVersion,
+            deviceModel = attrs.deviceModel,
+            language = attrs.language,
+            country = attrs.country,
+            timezone = attrs.timezone,
+            callback = object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
             override fun onSuccess(response: ApiClient.RegisterResponse) {
                 Log.d(TAG, "Device registered: ${response.deviceId}, appId: ${response.appId}")
 
@@ -555,6 +571,39 @@ object RiviumPush {
         }
 
         return id
+    }
+
+    private data class DeviceAttributes(
+        val appVersion: String?,
+        val osVersion: String?,
+        val deviceModel: String?,
+        val language: String?,
+        val country: String?,
+        val timezone: String?
+    )
+
+    /**
+     * Read platform-native device attributes. Sent on every register() so
+     * the dashboard can segment by app version, OS, locale, timezone, etc.
+     * without customer apps having to populate metadata manually.
+     */
+    private fun captureDeviceAttributes(context: Context): DeviceAttributes {
+        val appVersion = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (e: Exception) {
+            null
+        }
+
+        val locale = java.util.Locale.getDefault()
+
+        return DeviceAttributes(
+            appVersion = appVersion,
+            osVersion = android.os.Build.VERSION.RELEASE,
+            deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
+            language = locale.language.ifEmpty { null },
+            country = locale.country.ifEmpty { null },
+            timezone = java.util.TimeZone.getDefault().id
+        )
     }
 
     private fun saveServiceState(context: Context, enabled: Boolean) {
