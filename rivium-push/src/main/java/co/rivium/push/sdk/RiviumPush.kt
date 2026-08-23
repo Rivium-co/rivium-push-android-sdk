@@ -245,6 +245,7 @@ object RiviumPush {
             metadata,
             appIdentifier,
             appVersion = attrs.appVersion,
+            appBuild = attrs.appBuild,
             osVersion = attrs.osVersion,
             deviceModel = attrs.deviceModel,
             language = attrs.language,
@@ -575,6 +576,7 @@ object RiviumPush {
 
     private data class DeviceAttributes(
         val appVersion: String?,
+        val appBuild: Long?,
         val osVersion: String?,
         val deviceModel: String?,
         val language: String?,
@@ -588,16 +590,25 @@ object RiviumPush {
      * without customer apps having to populate metadata manually.
      */
     private fun captureDeviceAttributes(context: Context): DeviceAttributes {
-        val appVersion = try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        } catch (e: Exception) {
-            null
+        var appVersion: String? = null
+        var appBuild: Long? = null
+        try {
+            val pi = context.packageManager.getPackageInfo(context.packageName, 0)
+            appVersion = pi.versionName
+            appBuild = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                pi.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pi.versionCode.toLong()
+            }
+        } catch (_: Exception) {
         }
 
         val locale = java.util.Locale.getDefault()
 
         return DeviceAttributes(
             appVersion = appVersion,
+            appBuild = appBuild,
             osVersion = android.os.Build.VERSION.RELEASE,
             deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
             language = locale.language.ifEmpty { null },

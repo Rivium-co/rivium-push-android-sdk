@@ -33,6 +33,7 @@ class ApiClient(private val config: RiviumPushConfig) {
         // dashboard's segment builder can filter on them as preset fields.
         // Nullable for backward compat with older SDK / server pairings.
         val appVersion: String? = null,
+        val appBuild: Long? = null,
         val osVersion: String? = null,
         val deviceModel: String? = null,
         val language: String? = null,
@@ -72,6 +73,7 @@ class ApiClient(private val config: RiviumPushConfig) {
         metadata: Map<String, Any>? = null,
         appIdentifier: String? = null,
         appVersion: String? = null,
+        appBuild: Long? = null,
         osVersion: String? = null,
         deviceModel: String? = null,
         language: String? = null,
@@ -85,6 +87,7 @@ class ApiClient(private val config: RiviumPushConfig) {
             metadata = metadata,
             appIdentifier = appIdentifier,
             appVersion = appVersion,
+            appBuild = appBuild,
             osVersion = osVersion,
             deviceModel = deviceModel,
             language = language,
