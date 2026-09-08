@@ -49,6 +49,26 @@ class RiviumPushService : Service() {
             Log.d(TAG, "reconnectNow() called from external")
             socketManager?.reconnectNow()
         }
+
+
+        /**
+         * Confirm to Rivium Push that a notification arrived on this device.
+         *
+         * No-op when the message carries no id (sent by an older backend) or
+         * the SDK is not fully initialised. Never throws: a missed ack costs a
+         * delivery statistic, not a notification.
+         */
+        private fun reportDelivered(messageId: String?) {
+            val id = messageId ?: return
+            val device = deviceId ?: return
+            val cfg = config ?: return
+            try {
+                ApiClient(cfg).reportDelivered(id, device)
+            } catch (e: Exception) {
+                Log.w(TAG, "Delivery ack failed: ${e.message}")
+            }
+        }
+
     }
 
     override fun onCreate() {
@@ -298,6 +318,11 @@ class RiviumPushService : Service() {
             } else {
                 Log.d(TAG, "Silent message - skipping notification")
             }
+
+            // Confirm delivery. The transport only tells the server that a
+            // notification was accepted for sending — this ack is the only
+            // signal that it actually reached the device. Fire-and-forget.
+            reportDelivered(message.messageId)
 
             // Notify callback (always, even if notification is not shown)
             callback?.onMessageReceived(message)

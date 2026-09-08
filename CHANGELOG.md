@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-09-08
+
+### Added
+- Delivery receipts. The SDK now confirms to the server that a notification actually reached the device, so delivery can be told apart from "accepted by the transport".
+
+## [0.1.10] - 2026-08-23
+
+### Added
+- App build number captured alongside app version.
+
+## [0.1.9] - 2026-08-23
+
+### Added
+- Device attributes captured automatically for segment filters.
+
 ## [0.1.8] - 2026-08-18
 
 ### Fixed

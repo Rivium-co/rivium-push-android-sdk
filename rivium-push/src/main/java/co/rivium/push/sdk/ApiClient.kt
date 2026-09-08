@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.IOException
 
 /**
@@ -568,5 +569,41 @@ class ApiClient(private val config: RiviumPushConfig) {
             Log.e(TAG, "Track A/B test event failed: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Confirm that a notification reached this device.
+     *
+     * PN Protocol, APNs and Web Push all report only that the transport
+     * accepted a notification — none of them confirm it arrived. This ack is
+     * the only signal that it actually did, letting the dashboard separate
+     * "accepted" from "delivered".
+     *
+     * Fire-and-forget: a failed ack costs a delivery statistic, never the
+     * notification itself.
+     */
+    fun reportDelivered(messageId: String, deviceId: String) {
+        val payload = JSONObject().apply {
+            put("messageId", messageId)
+            put("deviceId", deviceId)
+        }
+        val body = payload.toString().toRequestBody(jsonMediaType)
+
+        val httpRequest = Request.Builder()
+            .url("${RiviumPushConfig.SERVER_URL}/receipts/delivered")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(body)
+            .build()
+
+        client.newCall(httpRequest).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.w(TAG, "Delivery ack failed: ${e.message}")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+            }
+        })
     }
 }
