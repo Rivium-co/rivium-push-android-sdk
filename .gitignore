@@ -34,3 +34,11 @@ example/daemon/
 example/native/
 example/wrapper/
 example/notifications/
+
+# Local credential backups — NEVER commit (public repo)
+.secrets-backup/
+**/.gnupg/
+*.asc
+*.gpg
+*.key
+gradle.properties.backup
