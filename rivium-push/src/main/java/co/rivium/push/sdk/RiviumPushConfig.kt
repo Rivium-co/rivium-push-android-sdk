@@ -35,7 +35,32 @@ data class RiviumPushConfig(
     internal var pushUsername: String? = null,
     internal var pushPassword: String? = null,
     // PN Protocol token for authentication
-    internal var pnToken: String? = null
+    internal var pnToken: String? = null,
+
+    /**
+     * Automatically refresh this device's registration on init() (default: true).
+     *
+     * Only applies to installs that have registered before and not called
+     * unregister(). The SDK re-registers in the background when 24 hours have
+     * passed since the last successful registration, or when the app version/build,
+     * SDK version or userId changed. It never prompts for permissions, never
+     * blocks init() and never starts the push service by itself.
+     * An explicit register() call always registers regardless of this flag.
+     */
+    val autoRefresh: Boolean = true,
+
+    /**
+     * Name of the official wrapper SDK embedding this native SDK, e.g. "flutter"
+     * or "react-native". Intended for official Rivium wrappers only — app
+     * developers should leave it null. Must be set together with
+     * [wrapperSdkVersion]; both must be ≤32 chars of [A-Za-z0-9._+-] or they are
+     * ignored. When set, the wrapper identity is reported to the server instead
+     * of "android"/[RiviumPush.SDK_VERSION].
+     */
+    val wrapperSdkName: String? = null,
+
+    /** Version of the official wrapper SDK. See [wrapperSdkName]. */
+    val wrapperSdkVersion: String? = null
 ) {
     // Internal notification channel config - not user-configurable
     internal val notificationChannelId: String = "rivium_push_channel"

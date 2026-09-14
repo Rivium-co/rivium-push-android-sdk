@@ -44,7 +44,9 @@ class InboxManager private constructor(
         }
     }
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(co.rivium.push.sdk.internal.SdkIdentity.from(config).interceptor())
+        .build()
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 

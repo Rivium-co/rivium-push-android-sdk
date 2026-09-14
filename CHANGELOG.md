@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-09-14
+
+### Added
+- SDK identity: the SDK reports its name and version (`RiviumPush.SDK_VERSION`).
+- `autoRefresh` (default `true`): keeps a registered device up to date on launch.
+
+### Changed
+- Delivery confirmations are sent once per message and retried on network errors.
+
+### Fixed
+- `clearUserId()` failing offline could leave the previous user attached to the device.
+- README: topic methods are `subscribeTopic`/`unsubscribeTopic`; removed options that don't exist.
+
 ## [0.1.11] - 2026-09-08
 
 ### Added

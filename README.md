@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.6")
+    implementation("co.rivium:rivium-push-android:0.1.12")
 }
 ```
 
@@ -88,7 +88,8 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Register device
+        // Register on every launch: it keeps the device's token, app version
+        // and last-seen time current on the server.
         RiviumPush.register(
             userId = "user_123",  // optional
             metadata = mapOf(     // optional
@@ -118,7 +119,8 @@ if (initialMessage != null) {
 // Set user ID (after login)
 RiviumPush.setUserId("user_123")
 
-// Clear user ID (after logout)
+// Clear user ID (after logout) — also detaches the user on the server,
+// so this device stops receiving the previous user's notifications
 RiviumPush.clearUserId()
 ```
 
@@ -126,10 +128,10 @@ RiviumPush.clearUserId()
 
 ```kotlin
 // Subscribe
-RiviumPush.subscribeToTopic("news")
+RiviumPush.subscribeTopic("news")
 
 // Unsubscribe
-RiviumPush.unsubscribeFromTopic("news")
+RiviumPush.unsubscribeTopic("news")
 ```
 
 ## Rich Notifications
@@ -188,9 +190,23 @@ val count = RiviumPush.getInboxManager().getUnreadCount()
 |--------|------|---------|-------------|
 | `apiKey` | String | **required** | Your API key from the dashboard |
 | `notificationIcon` | String? | null | Notification icon resource name |
+| `showServiceNotification` | Boolean | true | Show the persistent foreground-service notification |
 | `showNotificationInForeground` | Boolean | true | Show notifications when app is in foreground |
-| `enableAnalytics` | Boolean | true | Send analytics events |
-| `logLevel` | String | "debug" | none, error, warning, info, debug, verbose |
+| `autoRefresh` | Boolean | true | On `init()`, silently refresh a previously registered device every 24h or when app version/build, SDK version or userId changed |
+| `wrapperSdkName` | String? | null | **Official wrappers only** (e.g. `"flutter"`, `"react-native"`). Reported instead of `android` |
+| `wrapperSdkVersion` | String? | null | **Official wrappers only.** Version reported with `wrapperSdkName` |
+
+The SDK reports its identity to the server (`sdkName`/`sdkVersion` on register and an `X-Rivium-SDK: android/<version>` header on every request). The native version is available as `RiviumPush.SDK_VERSION`. Wrapper values must be at most 32 characters of `A-Za-z0-9._+-` and are ignored unless both are set.
+
+## Delivery Tracking
+
+Every notification the device receives is confirmed to Rivium Push, so the
+**Delivery** page in the Rivium Console shows it as *delivered*, not just *sent*.
+Confirmations are sent once per message (redeliveries are skipped) and retried
+a few times on transient network errors. No setup is needed.
+
+The Console also shows, per device, the SDK and app version it runs and when it
+was last seen.
 
 ## VoIP Calls (Optional)
 
@@ -198,7 +214,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.2")
+    implementation("co.rivium:rivium-push-android:0.1.12")
     implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```
@@ -227,7 +243,16 @@ The Push SDK works independently without VoIP. VoIP is only needed for apps with
 
 ## Example App
 
-The `example/` folder contains a complete demo app with:
+Open the **repository root** in Android Studio (not the `example/` folder on its
+own) and run the `example` configuration. The app reads your API key from the
+`RIVIUM_PUSH_API_KEY` Gradle property; set it in `~/.gradle/gradle.properties`
+so it never lands in the repo:
+
+```properties
+RIVIUM_PUSH_API_KEY=rv_live_your_api_key
+```
+
+The example includes:
 - Push notification receiving
 - In-app message triggers
 - Inbox management

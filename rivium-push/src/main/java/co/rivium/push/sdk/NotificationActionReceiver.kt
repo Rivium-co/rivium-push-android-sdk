@@ -32,6 +32,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
             OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
+                .addInterceptor(co.rivium.push.sdk.internal.SdkIdentity.native.interceptor())
                 .build()
         }
     }

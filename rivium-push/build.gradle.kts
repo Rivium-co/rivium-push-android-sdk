@@ -9,7 +9,7 @@ plugins {
 // Increment MINOR for new features
 // Increment PATCH for bug fixes
 // Increment BUILD for iterations/testing during development
-val sdkVersion = "0.1.11"
+val sdkVersion = "0.1.12"
 
 android {
     namespace = "co.rivium.push.sdk"
@@ -22,6 +22,9 @@ android {
 
         // Dev server URL override — read from local.properties (gitignored).
         // Empty string means use production. Never set this in CI or release builds.
+        // SDK version exposed at runtime (RiviumPush.SDK_VERSION, X-Rivium-SDK header).
+        buildConfigField("String", "SDK_VERSION", "\"$sdkVersion\"")
+
         buildConfigField("String", "DEV_SERVER_URL", "\"${project.findProperty("RIVIUM_PUSH_SERVER_URL") ?: ""}\"")
     }
 

@@ -37,7 +37,9 @@ class BootReceiver : BroadcastReceiver() {
             val config = RiviumPushConfig(
                 apiKey = apiKey,
                 notificationIcon = prefs.getString("notificationIcon", null),
-                showServiceNotification = prefs.getBoolean("showServiceNotification", true)
+                showServiceNotification = prefs.getBoolean("showServiceNotification", true),
+                wrapperSdkName = prefs.getString("wrapperSdkName", null),
+                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null)
             )
             // Restore internal PN host and JWT token if available
             val pnHost = prefs.getString("pnHost", "") ?: ""

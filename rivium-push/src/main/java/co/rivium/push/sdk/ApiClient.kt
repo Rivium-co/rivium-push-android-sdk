@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import co.rivium.push.sdk.internal.SdkIdentity
 import org.json.JSONObject
 import java.io.IOException
 
@@ -18,8 +19,12 @@ class ApiClient(private val config: RiviumPushConfig) {
         private const val TAG = "Api"
     }
 
-    // Use secure client with retry interceptor and optional certificate pinning
-    private val client = NetworkConfig.createSecureClient()
+    private val sdkIdentity = SdkIdentity.from(config)
+
+    // Use secure client with retry interceptor; every request carries X-Rivium-SDK.
+    private val client = NetworkConfig.createSecureClient().newBuilder()
+        .addInterceptor(sdkIdentity.interceptor())
+        .build()
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -39,7 +44,10 @@ class ApiClient(private val config: RiviumPushConfig) {
         val deviceModel: String? = null,
         val language: String? = null,
         val country: String? = null,
-        val timezone: String? = null
+        val timezone: String? = null,
+        // SDK identity ("android" or an official wrapper such as "flutter").
+        val sdkName: String? = null,
+        val sdkVersion: String? = null
     )
 
     data class PNConnectionConfig(
@@ -93,7 +101,9 @@ class ApiClient(private val config: RiviumPushConfig) {
             deviceModel = deviceModel,
             language = language,
             country = country,
-            timezone = timezone
+            timezone = timezone,
+            sdkName = sdkIdentity.name,
+            sdkVersion = sdkIdentity.version
         )
 
         val body = gson.toJson(request).toRequestBody(jsonMediaType)
@@ -571,6 +581,9 @@ class ApiClient(private val config: RiviumPushConfig) {
         }
     }
 
+    /** Outcome of a delivery ack attempt. */
+    internal enum class AckResult { SUCCESS, RETRYABLE, PERMANENT_FAILURE }
+
     /**
      * Confirm that a notification reached this device.
      *
@@ -583,20 +596,7 @@ class ApiClient(private val config: RiviumPushConfig) {
      * notification itself.
      */
     fun reportDelivered(messageId: String, deviceId: String) {
-        val payload = JSONObject().apply {
-            put("messageId", messageId)
-            put("deviceId", deviceId)
-        }
-        val body = payload.toString().toRequestBody(jsonMediaType)
-
-        val httpRequest = Request.Builder()
-            .url("${RiviumPushConfig.SERVER_URL}/receipts/delivered")
-            .addHeader("x-api-key", config.apiKey)
-            .addHeader("Content-Type", "application/json")
-            .post(body)
-            .build()
-
-        client.newCall(httpRequest).enqueue(object : Callback {
+        client.newCall(buildDeliveredRequest(messageId, deviceId)).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 Log.w(TAG, "Delivery ack failed: ${e.message}")
             }
@@ -605,5 +605,40 @@ class ApiClient(private val config: RiviumPushConfig) {
                 response.close()
             }
         })
+    }
+
+    /**
+     * Synchronous delivery ack (call from a background thread). The server
+     * endpoint is idempotent, so retrying a [AckResult.RETRYABLE] result is safe.
+     */
+    internal fun reportDeliveredSync(messageId: String, deviceId: String): AckResult {
+        return try {
+            client.newCall(buildDeliveredRequest(messageId, deviceId)).execute().use {
+                when {
+                    it.isSuccessful -> AckResult.SUCCESS
+                    it.code == 408 || it.code == 429 || it.code >= 500 -> AckResult.RETRYABLE
+                    else -> {
+                        Log.w(TAG, "Delivery ack rejected: ${it.code}")
+                        AckResult.PERMANENT_FAILURE
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "Delivery ack failed: ${e.message}")
+            AckResult.RETRYABLE
+        }
+    }
+
+    private fun buildDeliveredRequest(messageId: String, deviceId: String): Request {
+        val payload = JSONObject().apply {
+            put("messageId", messageId)
+            put("deviceId", deviceId)
+        }
+        return Request.Builder()
+            .url("${RiviumPushConfig.SERVER_URL}/receipts/delivered")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
     }
 }

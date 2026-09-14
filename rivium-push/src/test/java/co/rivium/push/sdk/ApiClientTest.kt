@@ -63,6 +63,44 @@ class ApiClientTest {
     // ==================== Register Device Tests ====================
 
     @Test
+    fun `registerDevice sends sdk identity in body and header`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"deviceId\":\"d1\"}"))
+        val latch = CountDownLatch(1)
+        apiClient.registerDevice(
+            deviceId = "d1",
+            callback = object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
+                override fun onSuccess(response: ApiClient.RegisterResponse) { latch.countDown() }
+                override fun onError(error: String) { latch.countDown() }
+            }
+        )
+        awaitWithLooper(latch)
+
+        val request = mockWebServer.takeRequest()
+        val body = gson.fromJson(request.body.readUtf8(), Map::class.java)
+        assertEquals("android", body["sdkName"])
+        assertEquals(RiviumPush.SDK_VERSION, body["sdkVersion"])
+        assertEquals("android/${RiviumPush.SDK_VERSION}", request.getHeader("X-Rivium-SDK"))
+    }
+
+    @Test
+    fun `wrapper identity replaces native identity`() {
+        val wrapped = ApiClient(RiviumPushConfig(apiKey = "k", wrapperSdkName = "flutter", wrapperSdkVersion = "0.1.16"))
+        mockWebServer.enqueue(MockResponse().setResponseCode(200))
+
+        assertEquals(ApiClient.AckResult.SUCCESS, wrapped.reportDeliveredSync("m1", "d1"))
+
+        val request = mockWebServer.takeRequest()
+        assertEquals("flutter/0.1.16", request.getHeader("X-Rivium-SDK"))
+        assertTrue(request.body.readUtf8().contains("\"messageId\":\"m1\""))
+    }
+
+    @Test
+    fun `reportDeliveredSync classifies failures`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(400))
+        assertEquals(ApiClient.AckResult.PERMANENT_FAILURE, apiClient.reportDeliveredSync("m1", "d1"))
+    }
+
+    @Test
     fun `registerDevice sends correct request format`() {
         // Given
         val successResponse = """

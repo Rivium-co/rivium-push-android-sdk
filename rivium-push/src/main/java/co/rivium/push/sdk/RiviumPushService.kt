@@ -2,12 +2,14 @@ package co.rivium.push.sdk
 
 import android.app.Service
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import co.rivium.push.sdk.inbox.InboxContent
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
+import co.rivium.push.sdk.internal.DeliveryAckTracker
 import org.json.JSONObject
 
 /**
@@ -51,21 +53,125 @@ class RiviumPushService : Service() {
         }
 
 
+        private const val PREFS_NAME = "rivium_push_prefs"
+        private const val KEY_ACKED_MESSAGE_IDS = "acked_message_ids"
+
+        /** Delays before re-trying a failed ack (in addition to HTTP-level retries). */
+        internal val ACK_RETRY_DELAYS_MS = longArrayOf(5_000L, 30_000L, 120_000L)
+
+        private var ackTracker: DeliveryAckTracker? = null
+        private var ackClient: ApiClient? = null
+        private var ackClientConfig: RiviumPushConfig? = null
+
+        @Synchronized
+        private fun tracker(context: Context): DeliveryAckTracker {
+            return ackTracker ?: DeliveryAckTracker().also { t ->
+                try {
+                    t.restore(
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getString(KEY_ACKED_MESSAGE_IDS, null)
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to restore acked message ids: ${e.message}")
+                }
+                ackTracker = t
+            }
+        }
+
+        @Synchronized
+        private fun clientFor(cfg: RiviumPushConfig): ApiClient {
+            val existing = ackClient
+            if (existing != null && ackClientConfig === cfg) return existing
+            return ApiClient(cfg).also {
+                ackClient = it
+                ackClientConfig = cfg
+            }
+        }
+
+        /**
+         * Config for acks: the live one, or the one persisted by RiviumPush.init()
+         * when this process was started (e.g. service restart) before init().
+         */
+        private fun ackConfig(context: Context): Pair<RiviumPushConfig, String>? {
+            val cfg = config
+            val device = deviceId
+            if (cfg != null && device != null) return cfg to device
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val apiKey = prefs.getString("apiKey", null) ?: return null
+            val savedDevice = device ?: prefs.getString("device_id", null) ?: return null
+            val restored = cfg ?: RiviumPushConfig(
+                apiKey = apiKey,
+                wrapperSdkName = prefs.getString("wrapperSdkName", null),
+                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null)
+            )
+            return restored to savedDevice
+        }
+
         /**
          * Confirm to Rivium Push that a notification arrived on this device.
          *
-         * No-op when the message carries no id (sent by an older backend) or
-         * the SDK is not fully initialised. Never throws: a missed ack costs a
+         * Deduplicated per messageId (PN Protocol may redeliver), retried a few
+         * times with backoff on transient failures, and run off the calling
+         * thread. No-op when the message carries no id (older backend) or no
+         * configuration is available. Never throws: a missed ack costs a
          * delivery statistic, not a notification.
          */
-        private fun reportDelivered(messageId: String?) {
-            val id = messageId ?: return
-            val device = deviceId ?: return
-            val cfg = config ?: return
+        internal fun reportDelivered(context: Context, messageId: String?) {
+            val id = messageId?.takeIf { it.isNotEmpty() } ?: return
             try {
-                ApiClient(cfg).reportDelivered(id, device)
+                val appContext = context.applicationContext ?: context
+                val (cfg, device) = ackConfig(appContext) ?: run {
+                    Log.w(TAG, "Delivery ack skipped: SDK not configured")
+                    return
+                }
+                val tracker = tracker(appContext)
+                if (!tracker.tryClaim(id)) {
+                    Log.d(TAG, "Delivery ack already sent for $id")
+                    return
+                }
+                sendAck(appContext, clientFor(cfg), tracker, id, device, attempt = 0)
             } catch (e: Exception) {
                 Log.w(TAG, "Delivery ack failed: ${e.message}")
+            }
+        }
+
+        private fun sendAck(
+            context: Context,
+            client: ApiClient,
+            tracker: DeliveryAckTracker,
+            messageId: String,
+            device: String,
+            attempt: Int
+        ) {
+            RiviumPushExecutors.executeNetwork {
+                val result = try {
+                    client.reportDeliveredSync(messageId, device)
+                } catch (e: Exception) {
+                    ApiClient.AckResult.RETRYABLE
+                }
+                when {
+                    result == ApiClient.AckResult.SUCCESS -> {
+                        tracker.markAcked(messageId)
+                        val serialized = tracker.serialize()
+                        RiviumPushExecutors.executeIO {
+                            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                                .edit()
+                                .putString(KEY_ACKED_MESSAGE_IDS, serialized)
+                                .apply()
+                        }
+                    }
+                    result == ApiClient.AckResult.RETRYABLE && attempt < ACK_RETRY_DELAYS_MS.size -> {
+                        val delay = ACK_RETRY_DELAYS_MS[attempt]
+                        Log.d(TAG, "Delivery ack for $messageId will retry in ${delay}ms")
+                        RiviumPushExecutors.scheduleBackground(delay) {
+                            sendAck(context, client, tracker, messageId, device, attempt + 1)
+                        }
+                    }
+                    else -> {
+                        Log.w(TAG, "Delivery ack for $messageId gave up ($result)")
+                        tracker.release(messageId)
+                    }
+                }
             }
         }
 
@@ -295,6 +401,12 @@ class RiviumPushService : Service() {
         if (message != null) {
             Log.d(TAG, "Parsed message: title=${message.title}, body=${message.body}, silent=${message.silent}")
 
+            // Confirm delivery first so every path (foreground, background, silent,
+            // voip_call) is acked even if display or a callback throws. The transport
+            // only tells the server a notification was accepted for sending — this
+            // ack is the only signal that it actually reached the device.
+            reportDelivered(this, message.messageId)
+
             // Broadcast message for integrations (VoIP, etc.) to intercept
             // Uses system broadcast so manifest-registered receivers work even in background
             broadcastMessage(payload)
@@ -318,11 +430,6 @@ class RiviumPushService : Service() {
             } else {
                 Log.d(TAG, "Silent message - skipping notification")
             }
-
-            // Confirm delivery. The transport only tells the server that a
-            // notification was accepted for sending — this ack is the only
-            // signal that it actually reached the device. Fire-and-forget.
-            reportDelivered(message.messageId)
 
             // Notify callback (always, even if notification is not shown)
             callback?.onMessageReceived(message)

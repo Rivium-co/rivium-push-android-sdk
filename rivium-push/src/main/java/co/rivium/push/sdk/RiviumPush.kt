@@ -26,6 +26,8 @@ import co.rivium.push.sdk.inbox.InboxManager
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
 import co.rivium.push.sdk.inbox.InboxMessagesResponse
+import co.rivium.push.sdk.internal.RegistrationRefreshPolicy
+import co.rivium.push.sdk.internal.SdkIdentity
 
 /**
  * Main entry point for Rivium Push SDK
@@ -49,6 +51,9 @@ import co.rivium.push.sdk.inbox.InboxMessagesResponse
  * ```
  */
 object RiviumPush {
+    /** Version of this native SDK, e.g. "0.1.12". */
+    const val SDK_VERSION: String = BuildConfig.SDK_VERSION
+
     private const val TAG = "RiviumPush"
     private const val PREFS_NAME = "rivium_push_prefs"
     private const val KEY_DEVICE_ID = "device_id"
@@ -56,6 +61,13 @@ object RiviumPush {
     private const val KEY_USER_ID = "user_id"
     private const val KEY_SERVICE_ENABLED = "service_enabled"
     private const val KEY_APP_VERSION = "app_version"
+    private const val KEY_LAST_REGISTER_AT = "last_register_at"
+    private const val KEY_REGISTER_FINGERPRINT = "register_fingerprint"
+    private const val KEY_REGISTER_METADATA = "register_metadata"
+    private const val KEY_REGISTERED_USER_ID = "registered_user_id"
+
+    /** Grace period so an explicit register() right after init() wins over auto-refresh. */
+    private const val AUTO_REFRESH_DELAY_MS = 5_000L
 
     private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 10001
 
@@ -68,6 +80,8 @@ object RiviumPush {
     private var appId: String? = null
     private var currentUserId: String? = null
     private var notificationPermissionRequested = false
+    @Volatile private var explicitRegisterRequested = false
+    @Volatile private var autoRefreshScheduled = false
 
     /**
      * Initialize Rivium Push SDK
@@ -97,6 +111,11 @@ object RiviumPush {
 
         // Check for app update
         checkForAppUpdate(context)
+
+        // Keep a previously registered install fresh (app/SDK upgrades, userId, 24h)
+        if (config.autoRefresh) {
+            scheduleAutoRefresh(context.applicationContext)
+        }
     }
 
     private fun saveConfig(context: Context, config: RiviumPushConfig) {
@@ -107,6 +126,8 @@ object RiviumPush {
                 .putString("apiKey", config.apiKey)
                 .putString("notificationIcon", config.notificationIcon)
                 .putBoolean("showServiceNotification", config.showServiceNotification)
+                .putString("wrapperSdkName", config.wrapperSdkName)
+                .putString("wrapperSdkVersion", config.wrapperSdkVersion)
                 // Save appIdentifier (packageName) for boot recovery
                 .putString("appIdentifier", context.packageName)
                 .apply()
@@ -191,6 +212,8 @@ object RiviumPush {
         val client = apiClient ?: throw IllegalStateException("RiviumPush not initialized")
         val devId = deviceId ?: throw IllegalStateException("Device ID not available")
 
+        explicitRegisterRequested = true
+
         // Fall back to the previously-persisted userId so the host app can
         // call register() on every launch without forgetting the user identity.
         val effectiveUserId = userId ?: currentUserId
@@ -221,13 +244,18 @@ object RiviumPush {
         }
     }
 
+    /**
+     * @param silent true for init()-triggered auto-refresh: no callbacks, and the
+     *        push service is not started (it may not be allowed from background).
+     */
     private fun doRegister(
         ctx: Context,
         cfg: RiviumPushConfig,
         client: ApiClient,
         devId: String,
         userId: String?,
-        metadata: Map<String, Any>?
+        metadata: Map<String, Any>?,
+        silent: Boolean = false
     ) {
         // Store userId for InboxManager
         currentUserId = userId
@@ -285,6 +313,14 @@ object RiviumPush {
                 // Update InboxManager with userId if it exists
                 inboxManager?.setUserId(userId)
 
+                // Remember what was registered so init() can tell when a refresh is due
+                recordSuccessfulRegistration(ctx, cfg, attrs, userId, metadata)
+
+                if (silent) {
+                    Log.d(TAG, "Registration refreshed")
+                    return
+                }
+
                 callback?.onRegistered(response.deviceId)
 
                 // Start foreground service
@@ -295,6 +331,10 @@ object RiviumPush {
             }
 
             override fun onError(error: String) {
+                if (silent) {
+                    Log.w(TAG, "Registration refresh failed: $error")
+                    return
+                }
                 Log.e(TAG, "Registration failed: $error")
                 callback?.onError(error)
                 callback?.onDetailedError(RiviumPushError(RiviumPushErrorCode.REGISTRATION_FAILED, error))
@@ -615,6 +655,116 @@ object RiviumPush {
             country = locale.country.ifEmpty { null },
             timezone = java.util.TimeZone.getDefault().id
         )
+    }
+
+    private fun recordSuccessfulRegistration(
+        ctx: Context,
+        cfg: RiviumPushConfig,
+        attrs: DeviceAttributes,
+        userId: String?,
+        metadata: Map<String, Any>?
+    ) {
+        val fingerprint = RegistrationRefreshPolicy.fingerprint(
+            attrs.appVersion, attrs.appBuild, SdkIdentity.from(cfg), userId
+        )
+        // Persist an explicitly registered userId so later launches keep it (see register()).
+        if (userId != null) {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_USER_ID, userId)
+                .apply()
+        }
+        val metadataJson = metadata?.let {
+            try { com.google.gson.Gson().toJson(it) } catch (_: Exception) { null }
+        }
+        RiviumPushExecutors.executeIO {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putLong(KEY_LAST_REGISTER_AT, System.currentTimeMillis())
+                .putString(KEY_REGISTER_FINGERPRINT, fingerprint)
+                .putString(KEY_REGISTER_METADATA, metadataJson)
+                .putString(KEY_REGISTERED_USER_ID, userId)
+                .apply()
+        }
+    }
+
+    /**
+     * OneSignal-style "on session" refresh. Runs off the main thread after a short
+     * grace period; skipped if the app calls register() itself in the meantime.
+     * Never throws, never prompts, never starts the push service.
+     */
+    private fun scheduleAutoRefresh(ctx: Context) {
+        if (autoRefreshScheduled) return
+        autoRefreshScheduled = true
+        try {
+            RiviumPushExecutors.scheduleBackground(AUTO_REFRESH_DELAY_MS) {
+                try {
+                    runAutoRefresh(ctx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Auto-refresh skipped: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Auto-refresh not scheduled: ${e.message}")
+        }
+    }
+
+    private fun runAutoRefresh(ctx: Context) {
+        if (explicitRegisterRequested) {
+            Log.d(TAG, "Auto-refresh skipped: register() called by app")
+            return
+        }
+        val cfg = config ?: return
+        val client = apiClient ?: return
+        val devId = deviceId ?: return
+
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val lastAt = prefs.getLong(KEY_LAST_REGISTER_AT, 0L)
+        val hasRegisteredBefore = prefs.getBoolean(KEY_SERVICE_ENABLED, false) &&
+            (lastAt > 0L || prefs.getString(KEY_SUBSCRIPTION_ID, null) != null)
+
+        val attrs = captureDeviceAttributes(ctx)
+        val userId = currentUserId
+        val reason = RegistrationRefreshPolicy.decide(
+            hasRegisteredBefore = hasRegisteredBefore,
+            lastRegisteredAtMs = lastAt,
+            nowMs = System.currentTimeMillis(),
+            storedFingerprint = prefs.getString(KEY_REGISTER_FINGERPRINT, null),
+            currentFingerprint = RegistrationRefreshPolicy.fingerprint(
+                attrs.appVersion, attrs.appBuild, SdkIdentity.from(cfg), userId
+            )
+        )
+        if (reason == null) {
+            Log.d(TAG, "Auto-refresh not needed")
+            return
+        }
+
+        val metadata: Map<String, Any>? = prefs.getString(KEY_REGISTER_METADATA, null)?.let {
+            try {
+                com.google.gson.Gson().fromJson<Map<String, Any>>(
+                    it, object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
+                )
+            } catch (_: Exception) { null }
+        }
+
+        // The server treats a missing userId as "keep existing", so a register
+        // with userId=null cannot detach a logged-out user. If the last register
+        // carried a userId and the app has since cleared it (and that DELETE may
+        // have failed, e.g. offline), detach explicitly before refreshing.
+        val detachUser = userId == null && prefs.getString(KEY_REGISTERED_USER_ID, null) != null
+
+        Log.d(TAG, "Auto-refreshing registration ($reason)")
+        RiviumPushExecutors.executeMain {
+            // Re-check: the app may have called register() while we were deciding.
+            if (explicitRegisterRequested) return@executeMain
+            if (detachUser && currentUserId == null) {
+                client.clearUserId(devId, object : ApiClient.ApiCallback<String> {
+                    override fun onSuccess(response: String) { Log.d(TAG, "Stale user detached") }
+                    override fun onError(error: String) { Log.w(TAG, "Detach user failed: $error") }
+                })
+            }
+            doRegister(ctx, cfg, client, devId, userId, metadata, silent = true)
+        }
     }
 
     private fun saveServiceState(context: Context, enabled: Boolean) {
