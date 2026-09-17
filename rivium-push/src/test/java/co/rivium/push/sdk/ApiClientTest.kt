@@ -820,6 +820,25 @@ class ApiClientTest {
     }
 
     @Test
+    fun `register body carries installId only when it is known`() {
+        val withId = org.json.JSONObject(
+            apiClient.buildRegisterBody(
+                ApiClient.RegisterRequest(deviceId = "d1", installId = "a".repeat(32)),
+                mapOf("fcmToken" to "tok")
+            )
+        )
+        assertEquals("a".repeat(32), withId.getString("installId"))
+
+        val withoutId = org.json.JSONObject(
+            apiClient.buildRegisterBody(
+                ApiClient.RegisterRequest(deviceId = "d1", installId = null),
+                mapOf("fcmToken" to "tok")
+            )
+        )
+        assertFalse("unknown installId must be omitted, not empty", withoutId.has("installId"))
+    }
+
+    @Test
     fun `register body without extra fields is unchanged`() {
         val request = ApiClient.RegisterRequest(deviceId = "d1", userId = null)
         assertEquals(gson.toJson(request), apiClient.buildRegisterBody(request, null))

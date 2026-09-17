@@ -47,7 +47,10 @@ class ApiClient(private val config: RiviumPushConfig) {
         val timezone: String? = null,
         // SDK identity ("android" or an official wrapper such as "flutter").
         val sdkName: String? = null,
-        val sdkVersion: String? = null
+        val sdkVersion: String? = null,
+        // Stable per-install fingerprint (see InstallId) so the server can retire
+        // the previous row for the same physical device. Omitted when unavailable.
+        val installId: String? = null
     )
 
     data class PNConnectionConfig(
@@ -88,6 +91,7 @@ class ApiClient(private val config: RiviumPushConfig) {
         language: String? = null,
         country: String? = null,
         timezone: String? = null,
+        installId: String? = null,
         extraFields: Map<String, Any?>? = null,
         callback: ApiCallback<RegisterResponse>
     ) {
@@ -104,7 +108,8 @@ class ApiClient(private val config: RiviumPushConfig) {
             country = country,
             timezone = timezone,
             sdkName = sdkIdentity.name,
-            sdkVersion = sdkIdentity.version
+            sdkVersion = sdkIdentity.version,
+            installId = installId
         )
 
         val body = buildRegisterBody(request, extraFields).toRequestBody(jsonMediaType)

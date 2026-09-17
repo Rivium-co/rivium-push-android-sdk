@@ -198,6 +198,11 @@ val count = RiviumPush.getInboxManager().getUnreadCount()
 
 The SDK reports its identity to the server (`sdkName`/`sdkVersion` on register and an `X-Rivium-SDK: android/<version>` header on every request). The native version is available as `RiviumPush.SDK_VERSION`. Wrapper values must be at most 32 characters of `A-Za-z0-9._+-` and are ignored unless both are set.
 
+On register the SDK sends `installId`, a hash of the device's `ANDROID_ID` and the
+package name. It lets the server retire the record left by a previous install, so
+a reinstall does not leave a stale device behind. The raw `ANDROID_ID` never
+leaves the device.
+
 ## Delivery Tracking
 
 Every notification the device receives is confirmed to Rivium Push, so the
@@ -210,8 +215,8 @@ was last seen.
 
 ## FCM Add-on (Optional)
 
-The core SDK has no Firebase dependency. Apps that use Firebase can add a second delivery path
-through FCM:
+The core SDK has no Firebase dependency. Apps that use Firebase can add a second
+delivery path, which wakes the app when Android has closed the Rivium connection:
 
 ```kotlin
 dependencies {
@@ -219,10 +224,8 @@ dependencies {
 }
 ```
 
-Messages then arrive over both transports and are shown once (deduplicated by message ID).
-Without Firebase or Google Play services the add-on does nothing and the core SDK works as
-before. See [rivium-push-fcm/README.md](rivium-push-fcm/README.md) for setup, including apps
-that already have their own `FirebaseMessagingService`.
+Messages then arrive over both paths and are shown once. Without Firebase or Google
+Play services the add-on does nothing. Setup: [rivium-push-fcm/README.md](rivium-push-fcm/README.md).
 
 ## VoIP Calls (Optional)
 

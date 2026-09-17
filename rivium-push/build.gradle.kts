@@ -9,7 +9,7 @@ plugins {
 // Increment MINOR for new features
 // Increment PATCH for bug fixes
 // Increment BUILD for iterations/testing during development
-val sdkVersion = "0.1.12"
+val sdkVersion = "0.1.13"
 
 android {
     namespace = "co.rivium.push.sdk"

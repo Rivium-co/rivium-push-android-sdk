@@ -26,6 +26,7 @@ import co.rivium.push.sdk.inbox.InboxManager
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
 import co.rivium.push.sdk.inbox.InboxMessagesResponse
+import co.rivium.push.sdk.internal.InstallId
 import co.rivium.push.sdk.internal.RegistrationRefreshPolicy
 import co.rivium.push.sdk.internal.SdkIdentity
 
@@ -300,6 +301,7 @@ object RiviumPush {
             language = attrs.language,
             country = attrs.country,
             timezone = attrs.timezone,
+            installId = InstallId.get(ctx),
             extraFields = transportFields.takeIf { it.isNotEmpty() },
             callback = object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
             override fun onSuccess(response: ApiClient.RegisterResponse) {
