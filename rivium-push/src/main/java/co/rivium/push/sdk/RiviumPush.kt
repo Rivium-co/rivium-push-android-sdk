@@ -65,6 +65,7 @@ object RiviumPush {
     private const val KEY_REGISTER_FINGERPRINT = "register_fingerprint"
     private const val KEY_REGISTER_METADATA = "register_metadata"
     private const val KEY_REGISTERED_USER_ID = "registered_user_id"
+    private const val KEY_TRANSPORT_FIELDS = "transport_register_fields"
 
     /** Grace period so an explicit register() right after init() wins over auto-refresh. */
     private const val AUTO_REFRESH_DELAY_MS = 5_000L
@@ -82,6 +83,15 @@ object RiviumPush {
     private var notificationPermissionRequested = false
     @Volatile private var explicitRegisterRequested = false
     @Volatile private var autoRefreshScheduled = false
+    @Volatile private var pendingTransportRefresh = false
+
+    /**
+     * Extension point for official add-ons (e.g. co.rivium:rivium-push-fcm).
+     * Not for app use.
+     */
+    @RiviumPushInternalApi
+    val internalTransports: RiviumPushTransports
+        get() = RiviumPushTransports
 
     /**
      * Initialize Rivium Push SDK
@@ -115,6 +125,12 @@ object RiviumPush {
         // Keep a previously registered install fresh (app/SDK upgrades, userId, 24h)
         if (config.autoRefresh) {
             scheduleAutoRefresh(context.applicationContext)
+        }
+
+        // An add-on transport (FCM) reported new fields before init() ran in this process
+        if (pendingTransportRefresh) {
+            pendingTransportRefresh = false
+            scheduleTransportRefresh(context.applicationContext, AUTO_REFRESH_DELAY_MS)
         }
     }
 
@@ -267,6 +283,11 @@ object RiviumPush {
         // dashboard can offer typed segment filters (appVersion >, country =).
         val attrs = captureDeviceAttributes(ctx)
 
+        // Fields from add-on transports (e.g. fcmToken). Empty without add-ons,
+        // in which case the request is unchanged.
+        @OptIn(RiviumPushInternalApi::class)
+        val transportFields = RiviumPushTransports.collectRegisterFields(ctx)
+
         client.registerDevice(
             devId,
             userId,
@@ -279,6 +300,7 @@ object RiviumPush {
             language = attrs.language,
             country = attrs.country,
             timezone = attrs.timezone,
+            extraFields = transportFields.takeIf { it.isNotEmpty() },
             callback = object : ApiClient.ApiCallback<ApiClient.RegisterResponse> {
             override fun onSuccess(response: ApiClient.RegisterResponse) {
                 Log.d(TAG, "Device registered: ${response.deviceId}, appId: ${response.appId}")
@@ -314,7 +336,7 @@ object RiviumPush {
                 inboxManager?.setUserId(userId)
 
                 // Remember what was registered so init() can tell when a refresh is due
-                recordSuccessfulRegistration(ctx, cfg, attrs, userId, metadata)
+                recordSuccessfulRegistration(ctx, cfg, attrs, userId, metadata, transportFields)
 
                 if (silent) {
                     Log.d(TAG, "Registration refreshed")
@@ -590,6 +612,9 @@ object RiviumPush {
      */
     fun getDeviceId(): String? = deviceId
 
+    /** Live config when init() ran in this process, else null. */
+    internal fun configOrNull(): RiviumPushConfig? = config
+
     /**
      * Get the per-install subscription ID issued by the server during register().
      * This is the canonical addressing key for inbox/A-B/in-app calls and the new
@@ -662,7 +687,8 @@ object RiviumPush {
         cfg: RiviumPushConfig,
         attrs: DeviceAttributes,
         userId: String?,
-        metadata: Map<String, Any>?
+        metadata: Map<String, Any>?,
+        transportFields: Map<String, Any?>
     ) {
         val fingerprint = RegistrationRefreshPolicy.fingerprint(
             attrs.appVersion, attrs.appBuild, SdkIdentity.from(cfg), userId
@@ -684,6 +710,7 @@ object RiviumPush {
                 .putString(KEY_REGISTER_FINGERPRINT, fingerprint)
                 .putString(KEY_REGISTER_METADATA, metadataJson)
                 .putString(KEY_REGISTERED_USER_ID, userId)
+                .putString(KEY_TRANSPORT_FIELDS, transportFieldsJson(transportFields))
                 .apply()
         }
     }
@@ -739,13 +766,7 @@ object RiviumPush {
             return
         }
 
-        val metadata: Map<String, Any>? = prefs.getString(KEY_REGISTER_METADATA, null)?.let {
-            try {
-                com.google.gson.Gson().fromJson<Map<String, Any>>(
-                    it, object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
-                )
-            } catch (_: Exception) { null }
-        }
+        val metadata = storedMetadata(prefs)
 
         // The server treats a missing userId as "keep existing", so a register
         // with userId=null cannot detach a logged-out user. If the last register
@@ -764,6 +785,75 @@ object RiviumPush {
                 })
             }
             doRegister(ctx, cfg, client, devId, userId, metadata, silent = true)
+        }
+    }
+
+    private fun storedMetadata(prefs: android.content.SharedPreferences): Map<String, Any>? {
+        return prefs.getString(KEY_REGISTER_METADATA, null)?.let {
+            try {
+                com.google.gson.Gson().fromJson<Map<String, Any>>(
+                    it, object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type
+                )
+            } catch (_: Exception) { null }
+        }
+    }
+
+    private fun transportFieldsJson(fields: Map<String, Any?>): String =
+        com.google.gson.GsonBuilder().serializeNulls().create().toJson(fields)
+
+    /**
+     * Called by an add-on transport when its register fields changed (e.g. new
+     * FCM token). Re-registers silently, off the main thread, only for installs
+     * that registered before — a first register() already includes the fields.
+     */
+    internal fun refreshTransportRegistration(ctx: Context) {
+        if (config == null) {
+            // init() has not run in this process yet; refresh right after it does.
+            pendingTransportRefresh = true
+            return
+        }
+        scheduleTransportRefresh(ctx, 0L)
+    }
+
+    private fun scheduleTransportRefresh(ctx: Context, delayMs: Long) {
+        try {
+            RiviumPushExecutors.scheduleBackground(delayMs) {
+                try {
+                    runTransportRefresh(ctx)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Transport refresh skipped: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Transport refresh not scheduled: ${e.message}")
+        }
+    }
+
+    @OptIn(RiviumPushInternalApi::class)
+    private fun runTransportRefresh(ctx: Context) {
+        val cfg = config ?: return
+        val client = apiClient ?: return
+        val devId = deviceId ?: return
+
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val hasRegisteredBefore = prefs.getBoolean(KEY_SERVICE_ENABLED, false) &&
+            (prefs.getLong(KEY_LAST_REGISTER_AT, 0L) > 0L || prefs.getString(KEY_SUBSCRIPTION_ID, null) != null)
+        if (!hasRegisteredBefore) {
+            Log.d(TAG, "Transport refresh skipped: device not registered yet")
+            return
+        }
+
+        val current = transportFieldsJson(RiviumPushTransports.collectRegisterFields(ctx))
+        val lastSent = prefs.getString(KEY_TRANSPORT_FIELDS, null) ?: transportFieldsJson(emptyMap())
+        if (current == lastSent) {
+            Log.d(TAG, "Transport refresh not needed")
+            return
+        }
+
+        val metadata = storedMetadata(prefs)
+        Log.d(TAG, "Refreshing registration (transport fields changed)")
+        RiviumPushExecutors.executeMain {
+            doRegister(ctx, cfg, client, devId, currentUserId, metadata, silent = true)
         }
     }
 

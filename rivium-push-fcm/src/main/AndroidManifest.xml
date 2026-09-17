@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!--
+            Receives Rivium Push messages sent over FCM. Apps that already have their
+            own FirebaseMessagingService remove this one with tools:node="remove" and
+            forward to RiviumPushFcm instead (see README).
+        -->
+        <service
+            android:name="co.rivium.push.fcm.RiviumFcmMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Fetches the FCM token on app start (androidx.startup) -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="co.rivium.push.fcm.RiviumFcmInitializer"
+                android:value="androidx.startup" />
+        </provider>
+    </application>
+
+</manifest>

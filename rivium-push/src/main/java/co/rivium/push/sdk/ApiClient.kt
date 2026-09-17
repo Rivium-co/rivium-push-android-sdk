@@ -88,6 +88,7 @@ class ApiClient(private val config: RiviumPushConfig) {
         language: String? = null,
         country: String? = null,
         timezone: String? = null,
+        extraFields: Map<String, Any?>? = null,
         callback: ApiCallback<RegisterResponse>
     ) {
         val request = RegisterRequest(
@@ -106,7 +107,7 @@ class ApiClient(private val config: RiviumPushConfig) {
             sdkVersion = sdkIdentity.version
         )
 
-        val body = gson.toJson(request).toRequestBody(jsonMediaType)
+        val body = buildRegisterBody(request, extraFields).toRequestBody(jsonMediaType)
 
         val httpRequest = Request.Builder()
             .url("${RiviumPushConfig.SERVER_URL}/devices/register")
@@ -149,6 +150,20 @@ class ApiClient(private val config: RiviumPushConfig) {
                 }
             }
         })
+    }
+
+    /**
+     * Register request JSON plus fields contributed by add-on transports
+     * (e.g. fcmToken). Without extra fields the body is exactly as before.
+     * An extra field mapped to null is sent as JSON null so the server clears it.
+     */
+    internal fun buildRegisterBody(request: RegisterRequest, extraFields: Map<String, Any?>?): String {
+        if (extraFields.isNullOrEmpty()) return gson.toJson(request)
+        val tree = gson.toJsonTree(request).asJsonObject
+        for ((key, value) in extraFields) {
+            tree.add(key, if (value == null) com.google.gson.JsonNull.INSTANCE else gson.toJsonTree(value))
+        }
+        return com.google.gson.GsonBuilder().serializeNulls().create().toJson(tree)
     }
 
     /**
@@ -596,7 +611,7 @@ class ApiClient(private val config: RiviumPushConfig) {
      * notification itself.
      */
     fun reportDelivered(messageId: String, deviceId: String) {
-        client.newCall(buildDeliveredRequest(messageId, deviceId)).enqueue(object : Callback {
+        client.newCall(buildDeliveredRequest(messageId, deviceId, null)).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 Log.w(TAG, "Delivery ack failed: ${e.message}")
             }
@@ -611,9 +626,13 @@ class ApiClient(private val config: RiviumPushConfig) {
      * Synchronous delivery ack (call from a background thread). The server
      * endpoint is idempotent, so retrying a [AckResult.RETRYABLE] result is safe.
      */
-    internal fun reportDeliveredSync(messageId: String, deviceId: String): AckResult {
+    internal fun reportDeliveredSync(
+        messageId: String,
+        deviceId: String,
+        transport: String? = null
+    ): AckResult {
         return try {
-            client.newCall(buildDeliveredRequest(messageId, deviceId)).execute().use {
+            client.newCall(buildDeliveredRequest(messageId, deviceId, transport)).execute().use {
                 when {
                     it.isSuccessful -> AckResult.SUCCESS
                     it.code == 408 || it.code == 429 || it.code >= 500 -> AckResult.RETRYABLE
@@ -629,10 +648,12 @@ class ApiClient(private val config: RiviumPushConfig) {
         }
     }
 
-    private fun buildDeliveredRequest(messageId: String, deviceId: String): Request {
+    /** [transport] is "pn" or "fcm"; omitted when null (older behaviour). */
+    private fun buildDeliveredRequest(messageId: String, deviceId: String, transport: String?): Request {
         val payload = JSONObject().apply {
             put("messageId", messageId)
             put("deviceId", deviceId)
+            if (!transport.isNullOrEmpty()) put("transport", transport)
         }
         return Request.Builder()
             .url("${RiviumPushConfig.SERVER_URL}/receipts/delivered")

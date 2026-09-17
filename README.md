@@ -208,6 +208,22 @@ a few times on transient network errors. No setup is needed.
 The Console also shows, per device, the SDK and app version it runs and when it
 was last seen.
 
+## FCM Add-on (Optional)
+
+The core SDK has no Firebase dependency. Apps that use Firebase can add a second delivery path
+through FCM:
+
+```kotlin
+dependencies {
+    implementation("co.rivium:rivium-push-fcm:0.1.0")
+}
+```
+
+Messages then arrive over both transports and are shown once (deduplicated by message ID).
+Without Firebase or Google Play services the add-on does nothing and the core SDK works as
+before. See [rivium-push-fcm/README.md](rivium-push-fcm/README.md) for setup, including apps
+that already have their own `FirebaseMessagingService`.
+
 ## VoIP Calls (Optional)
 
 For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-push-voip-android-sdk):

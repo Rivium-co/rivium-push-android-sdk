@@ -804,4 +804,42 @@ class ApiClientTest {
         assertNotNull(receivedResponse)
         assertEquals("device123", receivedResponse?.deviceId)
     }
+
+    @Test
+    fun `reportDeliveredSync sends transport when given`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200))
+        mockWebServer.enqueue(MockResponse().setResponseCode(200))
+
+        apiClient.reportDeliveredSync("m1", "d1", "fcm")
+        val withTransport = org.json.JSONObject(mockWebServer.takeRequest().body.readUtf8())
+        assertEquals("fcm", withTransport.getString("transport"))
+
+        apiClient.reportDeliveredSync("m1", "d1")
+        val legacy = org.json.JSONObject(mockWebServer.takeRequest().body.readUtf8())
+        assertFalse(legacy.has("transport"))
+    }
+
+    @Test
+    fun `register body without extra fields is unchanged`() {
+        val request = ApiClient.RegisterRequest(deviceId = "d1", userId = null)
+        assertEquals(gson.toJson(request), apiClient.buildRegisterBody(request, null))
+        assertEquals(gson.toJson(request), apiClient.buildRegisterBody(request, emptyMap()))
+    }
+
+    @Test
+    fun `register body merges transport fields and keeps explicit nulls`() {
+        val request = ApiClient.RegisterRequest(deviceId = "d1", userId = null)
+
+        val set = org.json.JSONObject(
+            apiClient.buildRegisterBody(request, mapOf("fcmToken" to "tok", "fcmProjectId" to "proj"))
+        )
+        assertEquals("d1", set.getString("deviceId"))
+        assertEquals("tok", set.getString("fcmToken"))
+        assertEquals("proj", set.getString("fcmProjectId"))
+        assertFalse("unset request fields stay omitted", set.has("userId"))
+
+        val cleared = org.json.JSONObject(apiClient.buildRegisterBody(request, mapOf("fcmToken" to null)))
+        assertTrue(cleared.has("fcmToken"))
+        assertTrue(cleared.isNull("fcmToken"))
+    }
 }

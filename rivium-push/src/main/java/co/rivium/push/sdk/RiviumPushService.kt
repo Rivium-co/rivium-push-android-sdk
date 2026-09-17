@@ -1,3 +1,5 @@
+@file:OptIn(RiviumPushInternalApi::class)
+
 package co.rivium.push.sdk
 
 import android.app.Service
@@ -10,6 +12,7 @@ import co.rivium.push.sdk.inbox.InboxContent
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
 import co.rivium.push.sdk.internal.DeliveryAckTracker
+import co.rivium.push.sdk.internal.DisplayedMessageTracker
 import org.json.JSONObject
 
 /**
@@ -55,11 +58,15 @@ class RiviumPushService : Service() {
 
         private const val PREFS_NAME = "rivium_push_prefs"
         private const val KEY_ACKED_MESSAGE_IDS = "acked_message_ids"
+        private const val KEY_DISPLAYED_MESSAGE_IDS = "displayed_message_ids"
 
         /** Delays before re-trying a failed ack (in addition to HTTP-level retries). */
         internal val ACK_RETRY_DELAYS_MS = longArrayOf(5_000L, 30_000L, 120_000L)
 
         private var ackTracker: DeliveryAckTracker? = null
+        private var displayTracker: DisplayedMessageTracker? = null
+        /** Used to show notifications when the push service is not running (add-on transport). */
+        private var fallbackNotificationHelper: NotificationHelper? = null
         private var ackClient: ApiClient? = null
         private var ackClientConfig: RiviumPushConfig? = null
 
@@ -79,6 +86,48 @@ class RiviumPushService : Service() {
         }
 
         @Synchronized
+        private fun displayedTracker(context: Context): DisplayedMessageTracker {
+            return displayTracker ?: DisplayedMessageTracker().also { t ->
+                try {
+                    t.restore(
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getString(KEY_DISPLAYED_MESSAGE_IDS, null)
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to restore displayed message ids: ${e.message}")
+                }
+                displayTracker = t
+            }
+        }
+
+        /**
+         * Claim a message for handling. Returns false if the same messageId was
+         * already handled — e.g. it arrived over PN Protocol and again over FCM.
+         * Messages without an id are always handled.
+         */
+        private fun claimForDisplay(context: Context, messageId: String?): Boolean {
+            if (messageId.isNullOrEmpty()) return true
+            return try {
+                val tracker = displayedTracker(context)
+                if (!tracker.tryClaim(messageId)) return false
+                val serialized = tracker.serialize()
+                // commit on the IO thread: a process started only to handle an FCM
+                // message may be killed soon after, and the id must survive it.
+                RiviumPushExecutors.executeIO {
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_DISPLAYED_MESSAGE_IDS, serialized)
+                        .commit()
+                }
+                true
+            } catch (e: Exception) {
+                // Never lose a notification because dedupe failed.
+                Log.w(TAG, "Display dedupe failed: ${e.message}")
+                true
+            }
+        }
+
+        @Synchronized
         private fun clientFor(cfg: RiviumPushConfig): ApiClient {
             val existing = ackClient
             if (existing != null && ackClientConfig === cfg) return existing
@@ -93,14 +142,16 @@ class RiviumPushService : Service() {
          * when this process was started (e.g. service restart) before init().
          */
         private fun ackConfig(context: Context): Pair<RiviumPushConfig, String>? {
-            val cfg = config
-            val device = deviceId
+            val cfg = config ?: RiviumPush.configOrNull()
+            val device = deviceId ?: RiviumPush.getDeviceId()
             if (cfg != null && device != null) return cfg to device
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val apiKey = prefs.getString("apiKey", null) ?: return null
             val savedDevice = device ?: prefs.getString("device_id", null) ?: return null
             val restored = cfg ?: RiviumPushConfig(
                 apiKey = apiKey,
+                notificationIcon = prefs.getString("notificationIcon", null),
+                showServiceNotification = prefs.getBoolean("showServiceNotification", true),
                 wrapperSdkName = prefs.getString("wrapperSdkName", null),
                 wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null)
             )
@@ -116,7 +167,11 @@ class RiviumPushService : Service() {
          * configuration is available. Never throws: a missed ack costs a
          * delivery statistic, not a notification.
          */
-        internal fun reportDelivered(context: Context, messageId: String?) {
+        internal fun reportDelivered(
+            context: Context,
+            messageId: String?,
+            transport: String = RiviumPushTransports.TRANSPORT_PN
+        ) {
             val id = messageId?.takeIf { it.isNotEmpty() } ?: return
             try {
                 val appContext = context.applicationContext ?: context
@@ -129,7 +184,7 @@ class RiviumPushService : Service() {
                     Log.d(TAG, "Delivery ack already sent for $id")
                     return
                 }
-                sendAck(appContext, clientFor(cfg), tracker, id, device, attempt = 0)
+                sendAck(appContext, clientFor(cfg), tracker, id, device, transport, attempt = 0)
             } catch (e: Exception) {
                 Log.w(TAG, "Delivery ack failed: ${e.message}")
             }
@@ -141,11 +196,12 @@ class RiviumPushService : Service() {
             tracker: DeliveryAckTracker,
             messageId: String,
             device: String,
+            transport: String,
             attempt: Int
         ) {
             RiviumPushExecutors.executeNetwork {
                 val result = try {
-                    client.reportDeliveredSync(messageId, device)
+                    client.reportDeliveredSync(messageId, device, transport)
                 } catch (e: Exception) {
                     ApiClient.AckResult.RETRYABLE
                 }
@@ -164,7 +220,7 @@ class RiviumPushService : Service() {
                         val delay = ACK_RETRY_DELAYS_MS[attempt]
                         Log.d(TAG, "Delivery ack for $messageId will retry in ${delay}ms")
                         RiviumPushExecutors.scheduleBackground(delay) {
-                            sendAck(context, client, tracker, messageId, device, attempt + 1)
+                            sendAck(context, client, tracker, messageId, device, transport, attempt + 1)
                         }
                     }
                     else -> {
@@ -175,6 +231,170 @@ class RiviumPushService : Service() {
             }
         }
 
+
+        /**
+         * Handle a message payload from any transport ("pn" or an add-on such as
+         * "fcm"). Runs with or without the push service: when the service is not
+         * running (process started by FCM) configuration is restored from what
+         * RiviumPush.init() persisted.
+         *
+         * @return false if no configuration is available on this install.
+         */
+        internal fun handleIncomingPayload(context: Context, payload: String, transport: String): Boolean {
+            val appContext = context.applicationContext ?: context
+            Log.d(TAG, "Handling $transport message payload: $payload")
+
+            if (ackConfig(appContext) == null) {
+                Log.w(TAG, "Ignoring $transport message: RiviumPush was never initialized on this install")
+                return false
+            }
+
+            // Check message type for routing
+            try {
+                val json = JSONObject(payload)
+                val type = json.optString("type", "")
+                if (type == "inbox_update") {
+                    handleInboxUpdate(json)
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Failed to parse type from payload, continuing with normal flow")
+            }
+
+            val message = RiviumPushMessage.fromJson(payload)
+            if (message == null) {
+                Log.e(TAG, "Failed to parse message from JSON")
+                return true
+            }
+            Log.d(TAG, "Parsed message: title=${message.title}, body=${message.body}, silent=${message.silent}")
+
+            // The same message may arrive over PN Protocol and FCM: only the first
+            // copy is shown, broadcast and passed to the callback.
+            if (!claimForDisplay(appContext, message.messageId)) {
+                Log.d(TAG, "Duplicate message ${message.messageId} via $transport - ignoring")
+                return true
+            }
+
+            // Confirm delivery first so every path (foreground, background, silent,
+            // voip_call) is acked even if display or a callback throws. The transport
+            // only tells the server a notification was accepted for sending — this
+            // ack is the only signal that it actually reached the device.
+            reportDelivered(appContext, message.messageId, transport)
+
+            // Broadcast message for integrations (VoIP, etc.) to intercept
+            // Uses system broadcast so manifest-registered receivers work even in background
+            broadcastMessage(appContext, payload)
+
+            // Check if this is a VoIP call message — handled by VoIP SDK, skip regular notification
+            val isVoipCall = message.data?.get("type") == "voip_call"
+
+            // Show notification if not silent, not voip_call, and (not in foreground OR showNotificationInForeground is true)
+            if (!message.silent && !isVoipCall) {
+                val isAppInForeground = RiviumPush.getAppState().isInForeground
+                val showInForeground = (config ?: RiviumPush.configOrNull())?.showNotificationInForeground ?: true
+
+                if (!isAppInForeground || showInForeground) {
+                    Log.d(TAG, "Showing notification (foreground=$isAppInForeground, showInForeground=$showInForeground)")
+                    val helper = notificationHelperFor(appContext)
+                    if (helper != null) {
+                        helper.showNotification(message)
+                    } else {
+                        Log.w(TAG, "Notification skipped: SDK not configured")
+                    }
+                } else {
+                    Log.d(TAG, "Skipping notification - app in foreground and showNotificationInForeground=false")
+                }
+            } else if (isVoipCall) {
+                Log.d(TAG, "VoIP call message - skipping regular notification, handled by VoIP SDK")
+            } else {
+                Log.d(TAG, "Silent message - skipping notification")
+            }
+
+            // Notify callback (always, even if notification is not shown)
+            callback?.onMessageReceived(message)
+            return true
+        }
+
+        /** The running service's helper, or one built from the live/persisted config. */
+        @Synchronized
+        private fun notificationHelperFor(context: Context): NotificationHelper? {
+            notificationHelper?.let { return it }
+            fallbackNotificationHelper?.let { return it }
+            val cfg = ackConfig(context)?.first ?: return null
+            return NotificationHelper(context, cfg).also { fallbackNotificationHelper = it }
+        }
+
+        /**
+         * Handle inbox_update messages from pn-protocol.
+         * Creates an InboxMessage from the payload and routes it to InboxManager.
+         */
+        private fun handleInboxUpdate(json: JSONObject) {
+            Log.d(TAG, "Handling inbox_update message")
+            try {
+                val messageId = json.optString("messageId", "")
+                val title = json.optString("title", "")
+                val body = json.optString("body", "")
+
+                if (messageId.isEmpty()) {
+                    Log.e(TAG, "inbox_update missing messageId, ignoring")
+                    return
+                }
+
+                val inboxMessage = InboxMessage(
+                    id = messageId,
+                    content = InboxContent(
+                        title = title,
+                        body = body,
+                        imageUrl = if (json.has("imageUrl")) json.getString("imageUrl") else null,
+                        deepLink = if (json.has("deepLink")) json.getString("deepLink") else null,
+                        data = null
+                    ),
+                    status = InboxMessageStatus.UNREAD,
+                    category = if (json.has("category")) json.getString("category") else null,
+                    createdAt = json.optString("createdAt", System.currentTimeMillis().toString())
+                )
+
+                RiviumPush.getInboxManager().handleIncomingMessage(inboxMessage)
+                Log.d(TAG, "inbox_update routed to InboxManager: $messageId")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to handle inbox_update: ${e.message}")
+            }
+        }
+
+        /**
+         * Broadcast message using explicit intents for integrations to intercept.
+         * Uses explicit component targeting for Android 8.0+ compatibility.
+         */
+        private fun broadcastMessage(context: Context, payload: String) {
+            Log.d(TAG, "Broadcasting message for integrations")
+
+            // Known receivers that handle Rivium Push messages
+            // These are discovered at compile time from dependent SDKs
+            val knownReceivers = listOf(
+                "co.rivium.push.voip.RiviumPushMessageReceiver"  // VoIP SDK receiver
+            )
+
+            var sentCount = 0
+            for (receiverClass in knownReceivers) {
+                try {
+                    // Check if the receiver class exists in the app
+                    Class.forName(receiverClass)
+
+                    val receiverIntent = Intent(ACTION_MESSAGE).apply {
+                        putExtra(EXTRA_DATA, payload)
+                        component = ComponentName(context.packageName, receiverClass)
+                    }
+                    Log.d(TAG, "Sending to receiver: $receiverClass")
+                    context.sendBroadcast(receiverIntent)
+                    sentCount++
+                } catch (e: ClassNotFoundException) {
+                    // Receiver not available (SDK not included) - skip silently
+                    Log.d(TAG, "Receiver not available: $receiverClass")
+                }
+            }
+
+            Log.d(TAG, "Message broadcast sent to $sentCount receivers")
+        }
     }
 
     override fun onCreate() {
@@ -383,131 +603,7 @@ class RiviumPushService : Service() {
     }
 
     private fun handleMessage(payload: String) {
-        Log.d(TAG, "Handling message payload: $payload")
-
-        // Check message type for routing
-        try {
-            val json = JSONObject(payload)
-            val type = json.optString("type", "")
-            if (type == "inbox_update") {
-                handleInboxUpdate(json)
-                return
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "Failed to parse type from payload, continuing with normal flow")
-        }
-
-        val message = RiviumPushMessage.fromJson(payload)
-        if (message != null) {
-            Log.d(TAG, "Parsed message: title=${message.title}, body=${message.body}, silent=${message.silent}")
-
-            // Confirm delivery first so every path (foreground, background, silent,
-            // voip_call) is acked even if display or a callback throws. The transport
-            // only tells the server a notification was accepted for sending — this
-            // ack is the only signal that it actually reached the device.
-            reportDelivered(this, message.messageId)
-
-            // Broadcast message for integrations (VoIP, etc.) to intercept
-            // Uses system broadcast so manifest-registered receivers work even in background
-            broadcastMessage(payload)
-
-            // Check if this is a VoIP call message — handled by VoIP SDK, skip regular notification
-            val isVoipCall = message.data?.get("type") == "voip_call"
-
-            // Show notification if not silent, not voip_call, and (not in foreground OR showNotificationInForeground is true)
-            if (!message.silent && !isVoipCall) {
-                val isAppInForeground = RiviumPush.getAppState().isInForeground
-                val showInForeground = config?.showNotificationInForeground ?: true
-
-                if (!isAppInForeground || showInForeground) {
-                    Log.d(TAG, "Showing notification (foreground=$isAppInForeground, showInForeground=$showInForeground)")
-                    notificationHelper?.showNotification(message)
-                } else {
-                    Log.d(TAG, "Skipping notification - app in foreground and showNotificationInForeground=false")
-                }
-            } else if (isVoipCall) {
-                Log.d(TAG, "VoIP call message - skipping regular notification, handled by VoIP SDK")
-            } else {
-                Log.d(TAG, "Silent message - skipping notification")
-            }
-
-            // Notify callback (always, even if notification is not shown)
-            callback?.onMessageReceived(message)
-        } else {
-            Log.e(TAG, "Failed to parse message from JSON")
-        }
-    }
-
-    /**
-     * Handle inbox_update messages from pn-protocol.
-     * Creates an InboxMessage from the payload and routes it to InboxManager.
-     */
-    private fun handleInboxUpdate(json: JSONObject) {
-        Log.d(TAG, "Handling inbox_update message")
-        try {
-            val messageId = json.optString("messageId", "")
-            val title = json.optString("title", "")
-            val body = json.optString("body", "")
-
-            if (messageId.isEmpty()) {
-                Log.e(TAG, "inbox_update missing messageId, ignoring")
-                return
-            }
-
-            val inboxMessage = InboxMessage(
-                id = messageId,
-                content = InboxContent(
-                    title = title,
-                    body = body,
-                    imageUrl = if (json.has("imageUrl")) json.getString("imageUrl") else null,
-                    deepLink = if (json.has("deepLink")) json.getString("deepLink") else null,
-                    data = null
-                ),
-                status = InboxMessageStatus.UNREAD,
-                category = if (json.has("category")) json.getString("category") else null,
-                createdAt = json.optString("createdAt", System.currentTimeMillis().toString())
-            )
-
-            RiviumPush.getInboxManager().handleIncomingMessage(inboxMessage)
-            Log.d(TAG, "inbox_update routed to InboxManager: $messageId")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to handle inbox_update: ${e.message}")
-        }
-    }
-
-    /**
-     * Broadcast message using explicit intents for integrations to intercept.
-     * Uses explicit component targeting for Android 8.0+ compatibility.
-     */
-    private fun broadcastMessage(payload: String) {
-        Log.d(TAG, "Broadcasting message for integrations")
-
-        // Known receivers that handle Rivium Push messages
-        // These are discovered at compile time from dependent SDKs
-        val knownReceivers = listOf(
-            "co.rivium.push.voip.RiviumPushMessageReceiver"  // VoIP SDK receiver
-        )
-
-        var sentCount = 0
-        for (receiverClass in knownReceivers) {
-            try {
-                // Check if the receiver class exists in the app
-                Class.forName(receiverClass)
-
-                val receiverIntent = Intent(ACTION_MESSAGE).apply {
-                    putExtra(EXTRA_DATA, payload)
-                    component = ComponentName(packageName, receiverClass)
-                }
-                Log.d(TAG, "Sending to receiver: $receiverClass")
-                sendBroadcast(receiverIntent)
-                sentCount++
-            } catch (e: ClassNotFoundException) {
-                // Receiver not available (SDK not included) - skip silently
-                Log.d(TAG, "Receiver not available: $receiverClass")
-            }
-        }
-
-        Log.d(TAG, "Message broadcast sent to $sentCount receivers")
+        handleIncomingPayload(this, payload, RiviumPushTransports.TRANSPORT_PN)
     }
 
     override fun onDestroy() {

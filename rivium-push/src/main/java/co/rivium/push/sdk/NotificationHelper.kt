@@ -30,6 +30,7 @@ class NotificationHelper(
 ) {
     companion object {
         private const val TAG = "Notification"
+        private val nextNotificationId = java.util.concurrent.atomic.AtomicInteger(1000)
         private const val CHANNEL_SCHEMA_VERSION = 7
         private const val CHANNEL_ID = "rivium_push_v${CHANNEL_SCHEMA_VERSION}_default"
         private const val SERVICE_CHANNEL_ID = "rivium_push_v${CHANNEL_SCHEMA_VERSION}_service"
@@ -114,7 +115,9 @@ class NotificationHelper(
         }
     }
 
-    private var notificationId = 1000
+    // Shared by every helper instance so notifications shown by the push service
+    // and by an add-on transport (FCM, service not running) never reuse an id.
+    private val notificationId get() = nextNotificationId
 
     init {
         createNotificationChannels()
@@ -202,7 +205,7 @@ class NotificationHelper(
         body: String,
         imageBitmap: Bitmap?
     ) {
-        val currentNotificationId = notificationId++
+        val currentNotificationId = notificationId.getAndIncrement()
 
         // Check if this is an A/B test notification
         val abTestId = message.data?.get("abTestId")?.toString()
