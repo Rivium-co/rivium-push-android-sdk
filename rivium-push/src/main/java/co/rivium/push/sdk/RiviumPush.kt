@@ -27,6 +27,8 @@ import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
 import co.rivium.push.sdk.inbox.InboxMessagesResponse
 import co.rivium.push.sdk.internal.InstallId
+import co.rivium.push.sdk.internal.MqttEndpoints
+import co.rivium.push.sdk.internal.PrefsEndpointStore
 import co.rivium.push.sdk.internal.RegistrationRefreshPolicy
 import co.rivium.push.sdk.internal.SdkIdentity
 
@@ -168,6 +170,18 @@ object RiviumPush {
                 .edit()
                 .putString("pnHost", pnHost)
                 .apply()
+        }
+    }
+
+    private fun saveMqttEndpoints(context: Context, endpoints: List<co.rivium.protocol.PNEndpoint>) {
+        try {
+            // apply() updates the in-memory prefs at once, so the push service started
+            // right after registration already sees the list.
+            PrefsEndpointStore(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+                .saveServerEndpoints(endpoints)
+            if (endpoints.isNotEmpty()) Log.d(TAG, "Stored ${endpoints.size} PN endpoint(s)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to store PN endpoints: ${e.message}")
         }
     }
 
@@ -333,6 +347,9 @@ object RiviumPush {
                     savePNHost(ctx, pnConfig.host)
                     pnConfig.token?.let { savePNToken(ctx, it) }
                 }
+
+                // Optional failover endpoints. Absent = default endpoint only (clears any old list).
+                saveMqttEndpoints(ctx, MqttEndpoints.parse(response.mqttEndpoints))
 
                 // Update InboxManager with userId if it exists
                 inboxManager?.setUserId(userId)

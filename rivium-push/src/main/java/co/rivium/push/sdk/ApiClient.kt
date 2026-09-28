@@ -68,7 +68,9 @@ class ApiClient(private val config: RiviumPushConfig) {
         val appId: String? = null, // App ID from server (first 16 chars of projectId)
         val appIdentifier: String? = null, // App identifier for per-app message routing
         val message: String? = null,
-        val mqtt: PNConnectionConfig? = null // Server returns 'mqtt' key (legacy name), mapped to PNConnectionConfig
+        val mqtt: PNConnectionConfig? = null, // Server returns 'mqtt' key (legacy name), mapped to PNConnectionConfig
+        // Optional extra endpoints for failover: [{ host, port, tls }]. Validated by MqttEndpoints.parse().
+        val mqttEndpoints: com.google.gson.JsonElement? = null
     )
 
     interface ApiCallback<T> {

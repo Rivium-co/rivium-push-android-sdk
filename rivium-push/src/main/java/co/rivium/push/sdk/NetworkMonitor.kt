@@ -19,6 +19,9 @@ class NetworkMonitor(private val context: Context) {
     interface NetworkCallback {
         fun onNetworkAvailable()
         fun onNetworkLost()
+
+        /** The default network switched to a different one (e.g. Wi-Fi <-> cellular). */
+        fun onNetworkChanged() {}
     }
 
     private var callback: NetworkCallback? = null
@@ -26,6 +29,8 @@ class NetworkMonitor(private val context: Context) {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var isMonitoring = false
     private var lastNetworkState: Boolean? = null
+    // Current default network (API 24+), to tell a switch from a first connection
+    private var currentDefaultNetwork: Network? = null
 
     fun setCallback(callback: NetworkCallback) {
         this.callback = callback
@@ -66,6 +71,10 @@ class NetworkMonitor(private val context: Context) {
 
         // Initialize last known state
         lastNetworkState = isNetworkAvailable()
+        val trackDefault = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+        if (trackDefault) {
+            currentDefaultNetwork = try { connectivityManager?.activeNetwork } catch (e: Exception) { null }
+        }
         Log.d(TAG, "Starting network monitoring. Initial state: ${if (lastNetworkState == true) "connected" else "disconnected"}")
 
         networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -75,9 +84,19 @@ class NetworkMonitor(private val context: Context) {
                 Log.d(TAG, "Previous state: $lastNetworkState")
                 Log.d(TAG, "===============================")
 
-                // Only trigger callback if state actually changed
-                if (lastNetworkState != true) {
-                    lastNetworkState = true
+                val previousDefault = currentDefaultNetwork
+                if (trackDefault) currentDefaultNetwork = network
+
+                val switched = trackDefault && previousDefault != null && previousDefault != network
+                val wasAvailable = lastNetworkState == true
+                lastNetworkState = true
+
+                if (switched) {
+                    // Any socket still open is bound to the previous network
+                    Log.d(TAG, "Default network changed: $previousDefault -> $network")
+                    callback?.onNetworkChanged()
+                } else if (!wasAvailable) {
+                    // Only trigger callback if state actually changed
                     callback?.onNetworkAvailable()
                 }
             }
@@ -86,6 +105,9 @@ class NetworkMonitor(private val context: Context) {
                 Log.d(TAG, "====== NETWORK LOST ======")
                 Log.d(TAG, "Network: $network")
                 Log.d(TAG, "==========================")
+
+                // currentDefaultNetwork is kept: if another network takes over,
+                // onAvailable() reports it as a change (the socket was on this one).
 
                 // Check if we still have any active network
                 val stillConnected = isNetworkAvailable()
@@ -117,7 +139,13 @@ class NetworkMonitor(private val context: Context) {
             .build()
 
         try {
-            connectivityManager?.registerNetworkCallback(request, networkCallback!!)
+            if (trackDefault) {
+                // Follows the network the system actually routes traffic over,
+                // so a Wi-Fi <-> cellular switch is reported as a change.
+                connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
+            } else {
+                connectivityManager?.registerNetworkCallback(request, networkCallback!!)
+            }
             isMonitoring = true
             Log.d(TAG, "Network monitoring started")
         } catch (e: Exception) {
@@ -142,8 +170,31 @@ class NetworkMonitor(private val context: Context) {
         }
 
         networkCallback = null
+        currentDefaultNetwork = null
         isMonitoring = false
         Log.d(TAG, "Network monitoring stopped")
+    }
+
+    /**
+     * Network type used to remember which PN endpoint works: "wifi", "cellular"
+     * or "other" (VPN, ethernet, unknown). A VPN counts as "other" even when it
+     * runs over Wi-Fi or cellular, since reachability differs through it.
+     */
+    fun getEndpointNetworkType(): String {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "other"
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = cm.activeNetwork ?: return "other"
+            val caps = cm.getNetworkCapabilities(network) ?: return "other"
+            when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "other"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                else -> "other"
+            }
+        } else {
+            getNetworkType()
+        }
     }
 
     /**

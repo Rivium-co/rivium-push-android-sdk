@@ -9,7 +9,7 @@ plugins {
 // Increment MINOR for new features
 // Increment PATCH for bug fixes
 // Increment BUILD for iterations/testing during development
-val sdkVersion = "0.1.13"
+val sdkVersion = "0.1.14"
 
 android {
     namespace = "co.rivium.push.sdk"
@@ -102,7 +102,7 @@ dependencies {
     if (useLocalProtocol) {
         implementation(project(":pn-protocol"))
     } else {
-        implementation("co.rivium:pn-protocol:0.2.0")
+        implementation("co.rivium:pn-protocol:0.2.1")
     }
 
     // AndroidX

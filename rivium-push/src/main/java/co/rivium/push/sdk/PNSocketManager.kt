@@ -2,7 +2,10 @@ package co.rivium.push.sdk
 
 import android.content.Context
 import co.rivium.protocol.*
-import org.json.JSONObject
+import co.rivium.push.sdk.internal.EndpointSelector
+import co.rivium.push.sdk.internal.MqttEndpoints
+import co.rivium.push.sdk.internal.PrefsEndpointStore
+import co.rivium.push.sdk.internal.ReconnectDebouncer
 
 /**
  * Manager that wraps PNSocket for the Rivium Push SDK.
@@ -18,9 +21,36 @@ class PNSocketManager(
 ) {
     companion object {
         private const val TAG = "PNSocket"
+        private const val PREFS_NAME = "rivium_push_prefs"
+
+        /** Keepalive (seconds). Short enough to survive aggressive NAT/carrier timeouts. */
+        internal const val HEARTBEAT_INTERVAL_S = 30
+        internal const val CONNECTION_TIMEOUT_S = 30
+        internal const val RECONNECT_DELAY_MS = 1_000L
+        /** Backoff cap; the server keeps undelivered messages, so reconnect fast. */
+        internal const val MAX_RECONNECT_DELAY_MS = 60_000L
+        /** 0 = never give up while the SDK is started. */
+        internal const val MAX_RECONNECT_ATTEMPTS = 0
+
+        /** Screen on + user present + foreground usually fire together. */
+        private const val WAKE_DEBOUNCE_MS = 2_000L
+        private const val NETWORK_DEBOUNCE_MS = 1_000L
     }
 
+    @Volatile
     private var socket: PNSocket? = null
+
+    private val networkMonitor = NetworkMonitor(context)
+    private val endpointSelector = EndpointSelector(
+        store = PrefsEndpointStore(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)),
+        defaultEndpoint = {
+            config.pnHost.takeIf { it.isNotEmpty() }?.let { PNEndpoint(it, config.pnPort, config.pnSecure) }
+        },
+        networkKey = { currentNetworkKey() }
+    )
+    private val wakeDebouncer = ReconnectDebouncer(WAKE_DEBOUNCE_MS)
+    private val networkAvailableDebouncer = ReconnectDebouncer(NETWORK_DEBOUNCE_MS)
+    private val networkChangedDebouncer = ReconnectDebouncer(NETWORK_DEBOUNCE_MS)
     private var callback: PNSocketManagerCallback? = null
     private var errorCallback: PNSocketErrorCallback? = null
     private var hasSubscribedOnce: Boolean = false
@@ -81,13 +111,13 @@ class PNSocketManager(
             .gateway(config.pnHost)
             .port(config.pnPort)
             .clientId("rp_${appId}_${deviceId}_${context.packageName.hashCode().toUInt().toString(16)}")
-            .heartbeatInterval(60)
-            .connectionTimeout(30)
+            .heartbeatInterval(HEARTBEAT_INTERVAL_S)
+            .connectionTimeout(CONNECTION_TIMEOUT_S)
             .freshStart(true)
             .autoReconnect(true)
-            .maxReconnectAttempts(10)
-            .reconnectDelay(1000)
-            .maxReconnectDelay(300000)
+            .maxReconnectAttempts(MAX_RECONNECT_ATTEMPTS)
+            .reconnectDelay(RECONNECT_DELAY_MS)
+            .maxReconnectDelay(MAX_RECONNECT_DELAY_MS)
             .secure(config.pnSecure)  // Use TLS/SSL from server config
 
         // Set JWT token auth if available (per-device authentication)
@@ -102,6 +132,17 @@ class PNSocketManager(
 
         // Create a dedicated PNSocket instance (no singleton)
         socket = PNSocket(pnConfig)
+
+        // Server-provided endpoints (if any) with failover; default endpoint last
+        socket?.setEndpointProvider { endpointSelector.endpoints() }
+        socket?.addEndpointListener { endpoint ->
+            Log.d(TAG, "Connected via $endpoint")
+            try {
+                endpointSelector.onConnected(endpoint)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to remember endpoint: ${e.message}")
+            }
+        }
 
         // Add connection listener
         socket?.addConnectionListener(object : PNConnectionListener {
@@ -233,5 +274,65 @@ class PNSocketManager(
         // Use reconnectImmediately() to cancel any pending retry and reconnect
         // without destroying the socket (preserves activeChannels for resubscription)
         socket?.reconnectImmediately()
+    }
+
+    /**
+     * Screen on, user present or app in foreground. If waiting to retry, connect
+     * now with the backoff reset; if connected, check the connection is still alive.
+     */
+    fun onWake(reason: String) {
+        if (!wakeDebouncer.tryAcquire()) {
+            Log.d(TAG, "Wake trigger ($reason) debounced")
+            return
+        }
+        val s = socket ?: return
+        when (s.state()) {
+            PNState.CONNECTED -> {
+                Log.d(TAG, "Wake trigger ($reason) - probing connection")
+                s.probe()
+            }
+            PNState.CONNECTING, PNState.DISCONNECTING -> {
+                Log.d(TAG, "Wake trigger ($reason) - connect already in progress")
+            }
+            else -> {
+                Log.d(TAG, "Wake trigger ($reason) - reconnecting now")
+                s.reconnectImmediately()
+            }
+        }
+    }
+
+    /** A network became available after having none: connect now, backoff reset. */
+    fun onNetworkAvailable() {
+        if (!networkAvailableDebouncer.tryAcquire()) {
+            Log.d(TAG, "Network available debounced")
+            return
+        }
+        val s = socket ?: return
+        if (s.state() == PNState.CONNECTED || s.state() == PNState.CONNECTING) {
+            Log.d(TAG, "Network available - already ${s.state()}")
+            return
+        }
+        Log.d(TAG, "Network available - reconnecting now")
+        s.reconnectImmediately()
+    }
+
+    /**
+     * The default network switched (e.g. Wi-Fi <-> cellular, VPN on/off). The
+     * current socket is bound to the old network, so replace it right away.
+     */
+    fun onNetworkChanged() {
+        if (!networkChangedDebouncer.tryAcquire()) {
+            Log.d(TAG, "Network change debounced")
+            return
+        }
+        val s = socket ?: return
+        Log.d(TAG, "Default network changed - reconnecting on the new network")
+        s.reconnectImmediately(force = true)
+    }
+
+    private fun currentNetworkKey(): String = try {
+        MqttEndpoints.networkKey(networkMonitor.getEndpointNetworkType())
+    } catch (e: Exception) {
+        MqttEndpoints.NETWORK_OTHER
     }
 }

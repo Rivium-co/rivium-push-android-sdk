@@ -22,9 +22,12 @@ dependencyResolutionManagement {
 
 rootProject.name = "rivium-push-android-sdk"
 
-// PN Protocol module
-include(":pn-protocol")
-project(":pn-protocol").projectDir = file("../protocol/pn-protocol-android/pn-protocol")
+// PN Protocol: releases use the published co.rivium:pn-protocol from Maven Central.
+// For local protocol work, build with -PuseLocalProtocol=true to use ../protocol/pn-protocol-android.
+if (providers.gradleProperty("useLocalProtocol").orNull == "true") {
+    include(":pn-protocol")
+    project(":pn-protocol").projectDir = file("../protocol/pn-protocol-android/pn-protocol")
+}
 
 // SDK modules
 include(":rivium-push")

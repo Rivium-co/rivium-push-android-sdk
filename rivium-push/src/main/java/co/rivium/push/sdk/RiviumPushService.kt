@@ -3,11 +3,16 @@
 package co.rivium.push.sdk
 
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import co.rivium.push.sdk.inbox.InboxContent
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
@@ -397,11 +402,81 @@ class RiviumPushService : Service() {
         }
     }
 
+    // Reconnect triggers, registered while the service runs. Manifest receivers
+    // for SCREEN_ON / USER_PRESENT are not delivered on modern Android.
+    private var screenReceiver: BroadcastReceiver? = null
+    private var foregroundObserver: LifecycleEventObserver? = null
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "====== SERVICE CREATED ======")
         Log.d(TAG, "Service instance created")
         Log.d(TAG, "=============================")
+        registerWakeTriggers()
+    }
+
+    private fun registerWakeTriggers() {
+        if (screenReceiver == null) {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    val reason = when (intent.action) {
+                        Intent.ACTION_SCREEN_ON -> "screen on"
+                        Intent.ACTION_USER_PRESENT -> "user present"
+                        else -> return
+                    }
+                    socketManager?.onWake(reason)
+                }
+            }
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
+            }
+            try {
+                // System broadcasts are still delivered to a non-exported receiver
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(receiver, filter)
+                }
+                screenReceiver = receiver
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to register screen receiver: ${e.message}")
+            }
+        }
+
+        if (foregroundObserver == null) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_START) {
+                    socketManager?.onWake("app foreground")
+                }
+            }
+            try {
+                ProcessLifecycleOwner.get().lifecycle.addObserver(observer)
+                foregroundObserver = observer
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to observe app foreground: ${e.message}")
+            }
+        }
+    }
+
+    private fun unregisterWakeTriggers() {
+        screenReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to unregister screen receiver: ${e.message}")
+            }
+        }
+        screenReceiver = null
+
+        foregroundObserver?.let {
+            try {
+                ProcessLifecycleOwner.get().lifecycle.removeObserver(it)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to remove foreground observer: ${e.message}")
+            }
+        }
+        foregroundObserver = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -578,16 +653,16 @@ class RiviumPushService : Service() {
                     val networkType = networkMonitor?.getNetworkType() ?: "unknown"
                     callback?.onNetworkStateChanged(true, networkType)
 
-                    // Only trigger reconnection if fully disconnected.
-                    // If state is RECONNECTING, PNSocket's auto-retry will
-                    // pick up the network naturally — no need to interfere.
-                    val connState = socketManager?.getConnectionState()
-                    if (connState == PNSocketManager.ConnectionState.DISCONNECTED) {
-                        Log.d(TAG, "Fully disconnected, triggering reconnect now")
-                        socketManager?.reconnectNow()
-                    } else {
-                        Log.d(TAG, "Connection state is $connState - letting PNSocket handle reconnection")
-                    }
+                    // Connect now (backoff reset) instead of waiting for the
+                    // next scheduled retry. No-op while connected/connecting.
+                    socketManager?.onNetworkAvailable()
+                }
+
+                override fun onNetworkChanged() {
+                    val networkType = networkMonitor?.getNetworkType() ?: "unknown"
+                    Log.d(TAG, "Network changed ($networkType)")
+                    callback?.onNetworkStateChanged(true, networkType)
+                    socketManager?.onNetworkChanged()
                 }
 
                 override fun onNetworkLost() {
@@ -611,6 +686,8 @@ class RiviumPushService : Service() {
         Log.d(TAG, "Total service starts: $serviceStartCount")
         Log.d(TAG, "Total socketManager creates: $socketManagerCreateCount")
         Log.d(TAG, "===============================")
+
+        unregisterWakeTriggers()
 
         // Stop network monitoring
         networkMonitor?.stopMonitoring()
