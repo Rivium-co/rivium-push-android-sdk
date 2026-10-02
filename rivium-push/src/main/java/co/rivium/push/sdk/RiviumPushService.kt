@@ -180,6 +180,8 @@ class RiviumPushService : Service() {
             val id = messageId?.takeIf { it.isNotEmpty() } ?: return
             try {
                 val appContext = context.applicationContext ?: context
+                // This process may run without init() (service restart, add-on transport).
+                co.rivium.push.sdk.internal.UserTokenSession.attach(appContext)
                 val (cfg, device) = ackConfig(appContext) ?: run {
                     Log.w(TAG, "Delivery ack skipped: SDK not configured")
                     return

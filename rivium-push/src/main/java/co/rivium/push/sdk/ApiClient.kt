@@ -7,6 +7,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import co.rivium.push.sdk.internal.SdkIdentity
+import co.rivium.push.sdk.internal.UserTokenInterceptor
 import org.json.JSONObject
 import java.io.IOException
 
@@ -21,9 +22,11 @@ class ApiClient(private val config: RiviumPushConfig) {
 
     private val sdkIdentity = SdkIdentity.from(config)
 
-    // Use secure client with retry interceptor; every request carries X-Rivium-SDK.
+    // Use secure client with retry interceptor; every request carries X-Rivium-SDK
+    // and, when a signed user token is available, x-user-token.
     private val client = NetworkConfig.createSecureClient().newBuilder()
         .addInterceptor(sdkIdentity.interceptor())
+        .addInterceptor(UserTokenInterceptor())
         .build()
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()

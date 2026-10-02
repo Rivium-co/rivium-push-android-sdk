@@ -31,6 +31,7 @@ import co.rivium.push.sdk.internal.MqttEndpoints
 import co.rivium.push.sdk.internal.PrefsEndpointStore
 import co.rivium.push.sdk.internal.RegistrationRefreshPolicy
 import co.rivium.push.sdk.internal.SdkIdentity
+import co.rivium.push.sdk.internal.UserTokenSession
 
 /**
  * Main entry point for Rivium Push SDK
@@ -104,6 +105,11 @@ object RiviumPush {
         this.config = config
         this.apiClient = ApiClient(config)
         this.deviceId = getOrCreateDeviceId(context)
+
+        // Signed user token: keep the last one next to the other credentials. A
+        // provider set earlier (e.g. by a wrapper) stays when the config has none.
+        UserTokenSession.attach(context)
+        config.tokenProvider?.let { UserTokenSession.setProvider(it) }
 
         // Restore previously-issued subscriptionId so the foreground service can
         // subscribe to the new topic immediately on boot — register() will refresh it.
@@ -203,6 +209,47 @@ object RiviumPush {
         RiviumPushService.callback = callback
     }
 
+    // ==================== Signed User Tokens ====================
+
+    /**
+     * Set, replace or remove (null) the token provider after init(). Same as
+     * [RiviumPushConfig.tokenProvider]; may be called before init().
+     */
+    @JvmStatic
+    fun setTokenProvider(provider: PushTokenProvider?) {
+        UserTokenSession.setProvider(provider)
+    }
+
+    /**
+     * [setTokenProvider] for Java: [provider] is called on a background thread
+     * and may block.
+     */
+    @JvmStatic
+    fun setBlockingTokenProvider(provider: RiviumPushBlockingTokenProvider?) {
+        UserTokenSession.setBlockingProvider(provider)
+    }
+
+    /**
+     * Hand the SDK a user token you fetched yourself, or null to forget it.
+     * Without a token provider, call it again whenever you refresh the token.
+     */
+    @JvmStatic
+    fun setUserToken(token: String?) {
+        UserTokenSession.manager.set(token)
+        Log.d(TAG, if (token.isNullOrEmpty()) "User token cleared" else "User token set (length ${token.length})")
+    }
+
+    /**
+     * Listen for identity errors (see [RiviumPushAuthError]). Called on the
+     * main thread, in addition to [RiviumPushCallback.onAuthError].
+     */
+    @JvmStatic
+    fun setAuthErrorListener(listener: RiviumPushAuthErrorListener?) {
+        UserTokenSession.listener = listener
+    }
+
+    internal fun callbackOrNull(): RiviumPushCallback? = callback
+
     /**
      * Set log level for SDK logging
      */
@@ -290,6 +337,9 @@ object RiviumPush {
     ) {
         // Store userId for InboxManager
         currentUserId = userId
+
+        // A cached user token for a different user must not go out with this request.
+        userId?.let { UserTokenSession.manager.ensureSubject(it) }
 
         // Register with server (pass packageName as appIdentifier for per-app isolation)
         val appIdentifier = ctx.packageName
@@ -451,6 +501,9 @@ object RiviumPush {
         // Update InboxManager
         inboxManager?.setUserId(userId)
 
+        // Drop a cached user token that belongs to another user; the provider is asked again.
+        UserTokenSession.manager.ensureSubject(userId)
+
         client.setUserId(devId, userId, object : ApiClient.ApiCallback<String> {
             override fun onSuccess(response: String) {
                 Log.d(TAG, "User ID set: $userId")
@@ -483,13 +536,19 @@ object RiviumPush {
         // Update InboxManager
         inboxManager?.setUserId(null)
 
+        // The request still goes out with the current user token; it is forgotten
+        // afterwards unless the app signed another user in meanwhile.
+        val tokenMark = UserTokenSession.manager.mark()
+
         client.clearUserId(devId, object : ApiClient.ApiCallback<String> {
             override fun onSuccess(response: String) {
                 Log.d(TAG, "User ID cleared")
+                UserTokenSession.manager.clearIfUnchanged(tokenMark)
             }
 
             override fun onError(error: String) {
                 Log.e(TAG, "Failed to clear user ID: $error")
+                UserTokenSession.manager.clearIfUnchanged(tokenMark)
                 callback?.onError(error)
             }
         })
@@ -616,6 +675,7 @@ object RiviumPush {
         val ctx = context ?: return
         ctx.stopService(Intent(ctx, RiviumPushService::class.java))
         saveServiceState(ctx, false)
+        UserTokenSession.manager.clear()
         Log.d(TAG, "Service stopped")
     }
 

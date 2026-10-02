@@ -33,6 +33,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .addInterceptor(co.rivium.push.sdk.internal.SdkIdentity.native.interceptor())
+                .addInterceptor(co.rivium.push.sdk.internal.UserTokenInterceptor())
                 .build()
         }
     }
@@ -124,6 +125,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
      */
     private fun trackClickDirectly(context: Context, abTestId: String, variantId: String) {
         try {
+            // The process may have been started for this broadcast, before init().
+            co.rivium.push.sdk.internal.UserTokenSession.attach(context)
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val apiKey = prefs.getString("apiKey", null)
             val deviceId = prefs.getString("device_id", null)

@@ -60,7 +60,17 @@ data class RiviumPushConfig(
     val wrapperSdkName: String? = null,
 
     /** Version of the official wrapper SDK. See [wrapperSdkName]. */
-    val wrapperSdkVersion: String? = null
+    val wrapperSdkVersion: String? = null,
+
+    /**
+     * Optional. Proves who the user is: requests carry a token your server
+     * issued (the same Rivium user token the other Rivium SDKs accept), so
+     * nobody holding the public [apiKey] can act as another user. Called off
+     * the main thread when a token is needed, shortly before it expires and
+     * when the server reports it expired. Return null when no user is signed in.
+     * Can also be set later with [RiviumPush.setTokenProvider].
+     */
+    val tokenProvider: PushTokenProvider? = null
 ) {
     // Internal notification channel config - not user-configurable
     internal val notificationChannelId: String = "rivium_push_channel"

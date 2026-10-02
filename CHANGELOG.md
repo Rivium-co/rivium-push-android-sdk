@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-10-02
+
+### Added
+- Signed user tokens (optional): `tokenProvider` in `RiviumPushConfig`, `RiviumPush.setTokenProvider`, `setBlockingTokenProvider` and `setUserToken`. The token is sent as `x-user-token`, refreshed before it expires and retried once when the server reports it expired.
+- `RiviumPush.setAuthErrorListener` and `RiviumPushCallback.onAuthError` for identity errors.
+
+Without a token provider the SDK behaves exactly as before.
+
 ## [0.1.14] - 2026-09-29
 
 ### Changed

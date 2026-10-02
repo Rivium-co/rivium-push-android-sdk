@@ -124,6 +124,29 @@ RiviumPush.setUserId("user_123")
 RiviumPush.clearUserId()
 ```
 
+### Signed user tokens
+
+Optional. The API key in your app is public, so a user ID alone does not prove
+who the user is. Give the SDK a `tokenProvider` that asks **your server** for a
+Rivium user token - the same token, and the same function, you use with Rivium Chat:
+
+```kotlin
+val config = RiviumPushConfig(
+    apiKey = "rv_live_your_api_key",
+    tokenProvider = { myBackend.getRiviumToken() }  // suspend; null when signed out
+)
+RiviumPush.init(this, config)
+
+// Revoked or invalid token - send the user to login.
+RiviumPush.setAuthErrorListener { error -> Log.w("Push", error.code) }
+```
+
+The SDK caches the token, refreshes it before it expires and retries once if the
+server reports it expired. If the provider fails, requests are sent without a
+token, as before. You can also set the provider later with
+`RiviumPush.setTokenProvider(...)` (Java: `setBlockingTokenProvider`), or pass a
+token you fetched yourself with `RiviumPush.setUserToken(token)`.
+
 ### Topics
 
 ```kotlin
@@ -195,6 +218,7 @@ val count = RiviumPush.getInboxManager().getUnreadCount()
 | `autoRefresh` | Boolean | true | On `init()`, silently refresh a previously registered device every 24h or when app version/build, SDK version or userId changed |
 | `wrapperSdkName` | String? | null | **Official wrappers only** (e.g. `"flutter"`, `"react-native"`). Reported instead of `android` |
 | `wrapperSdkVersion` | String? | null | **Official wrappers only.** Version reported with `wrapperSdkName` |
+| `tokenProvider` | suspend () -> String? | null | Returns a signed user token from your server. See [Signed user tokens](#signed-user-tokens) |
 
 The SDK reports its identity to the server (`sdkName`/`sdkVersion` on register and an `X-Rivium-SDK: android/<version>` header on every request). The native version is available as `RiviumPush.SDK_VERSION`. Wrapper values must be at most 32 characters of `A-Za-z0-9._+-` and are ignored unless both are set.
 

@@ -94,6 +94,16 @@ interface RiviumPushCallback {
     fun onNotificationAction(message: RiviumPushMessage, actionId: String) {
         // Default: no-op
     }
+
+    /**
+     * Called when a request hit an identity error a token refresh cannot fix
+     * (invalid token, token required, userId mismatch, token provider failing).
+     * Informational - the request's own error is still reported as before.
+     * Only relevant when signed user tokens are used.
+     */
+    fun onAuthError(error: RiviumPushAuthError) {
+        // Default: no-op
+    }
 }
 
 /**
@@ -114,4 +124,5 @@ open class RiviumPushCallbackAdapter : RiviumPushCallback {
     override fun onAppUpdated(previousVersion: String, currentVersion: String, needsReregistration: Boolean) {}
     override fun onNotificationTapped(message: RiviumPushMessage) {}
     override fun onNotificationAction(message: RiviumPushMessage, actionId: String) {}
+    override fun onAuthError(error: RiviumPushAuthError) {}
 }
