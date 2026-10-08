@@ -6,7 +6,7 @@ Native Android SDK for real-time push notifications. No Firebase dependency - fu
 
 ## Features
 
-- Real-time push via pn-protocol
+- Real-time push
 - Survives app close and device restart
 - Rich notifications with images, actions, and deep links
 - In-app messaging (modal, banner, fullscreen, card)
@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.12")
+    implementation("co.rivium:rivium-push-android:0.1.16")
 }
 ```
 
@@ -257,7 +257,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.12")
+    implementation("co.rivium:rivium-push-android:0.1.16")
     implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```
