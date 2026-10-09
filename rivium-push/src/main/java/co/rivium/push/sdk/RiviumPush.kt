@@ -12,6 +12,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import co.rivium.push.sdk.inapp.InAppMessage
 import co.rivium.push.sdk.inapp.InAppMessageCallback
 import co.rivium.push.sdk.inapp.InAppMessageManager
@@ -26,6 +28,7 @@ import co.rivium.push.sdk.inbox.InboxManager
 import co.rivium.push.sdk.inbox.InboxMessage
 import co.rivium.push.sdk.inbox.InboxMessageStatus
 import co.rivium.push.sdk.inbox.InboxMessagesResponse
+import co.rivium.push.sdk.internal.DeferredServiceStart
 import co.rivium.push.sdk.internal.InstallId
 import co.rivium.push.sdk.internal.MqttEndpoints
 import co.rivium.push.sdk.internal.PrefsEndpointStore
@@ -660,12 +663,60 @@ object RiviumPush {
         RiviumPushService.callback = callback
 
         val intent = Intent(context, RiviumPushService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            Log.d(TAG, "Service started")
+        } catch (e: IllegalStateException) {
+            // Android 12+ throws ForegroundServiceStartNotAllowedException (an
+            // IllegalStateException) when the app is not in the foreground, e.g.
+            // registration finished while the screen was off. The device is
+            // registered; only the connection has to wait.
+            Log.w(TAG, "Service start refused in the background; it starts when the app is opened")
+            deferServiceStart(context.applicationContext, config)
         }
-        Log.d(TAG, "Service started")
+    }
+
+    /** Observer waiting for the app to come to the foreground, if a start was refused. */
+    private var deferredStartObserver: LifecycleEventObserver? = null
+
+    /** The app unregistered: a start that was waiting for the foreground must not happen. */
+    private fun cancelDeferredServiceStart() {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                deferredStartObserver?.let { ProcessLifecycleOwner.get().lifecycle.removeObserver(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not cancel the deferred service start: ${e.message}")
+            }
+            deferredStartObserver = null
+        }
+    }
+
+    private fun deferServiceStart(appContext: Context, config: RiviumPushConfig) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            try {
+                val lifecycle = ProcessLifecycleOwner.get().lifecycle
+                deferredStartObserver?.let { lifecycle.removeObserver(it) }
+                val deferred = DeferredServiceStart(
+                    startedWhenRefused = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                )
+                val observer = object : LifecycleEventObserver {
+                    override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                        if (!deferred.shouldRetryOn(event)) return
+                        lifecycle.removeObserver(this)
+                        if (deferredStartObserver === this) deferredStartObserver = null
+                        startService(appContext, config)
+                    }
+                }
+                deferredStartObserver = observer
+                lifecycle.addObserver(observer)
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not defer the service start: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -673,6 +724,7 @@ object RiviumPush {
      */
     fun unregister() {
         val ctx = context ?: return
+        cancelDeferredServiceStart()
         ctx.stopService(Intent(ctx, RiviumPushService::class.java))
         saveServiceState(ctx, false)
         UserTokenSession.manager.clear()
