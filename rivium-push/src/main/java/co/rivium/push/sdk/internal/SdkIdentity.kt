@@ -12,11 +12,15 @@ import okhttp3.Interceptor
  * Official wrappers (Flutter, React Native) set [RiviumPushConfig.wrapperSdkName]
  * and [RiviumPushConfig.wrapperSdkVersion]; when both are valid they replace the
  * native identity so the dashboard shows the SDK the app developer actually uses.
+ * The header then also names this native SDK underneath, User-Agent style:
+ * `X-Rivium-SDK: flutter/0.1.22 android/0.1.18` (wrapper first). Only public SDK
+ * names and versions — never a key, user or device detail.
  */
 internal data class SdkIdentity(val name: String, val version: String) {
 
-    /** Value for the `X-Rivium-SDK` header. */
-    val headerValue: String get() = "$name/$version"
+    /** Value for the `X-Rivium-SDK` header: this identity, then the native SDK when this is a wrapper. */
+    val headerValue: String
+        get() = if (name == NATIVE_NAME) "$name/$version" else "$name/$version $NATIVE_NAME/${BuildConfig.SDK_VERSION}"
 
     /** OkHttp interceptor that stamps `X-Rivium-SDK` on every request. */
     fun interceptor(): Interceptor = Interceptor { chain ->

@@ -206,6 +206,7 @@ class PNSocketManager(
                 details = error.message,
                 cause = error.cause
             )
+            co.rivium.push.sdk.internal.SdkDiagnostics.count(riviumPushError.errorCode)
             RiviumPushExecutors.executeMain {
                 errorCallback?.onError(riviumPushError)
                 callback?.onError(error.message)

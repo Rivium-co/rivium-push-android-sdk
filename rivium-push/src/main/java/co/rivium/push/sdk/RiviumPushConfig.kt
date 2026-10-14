@@ -70,7 +70,15 @@ data class RiviumPushConfig(
      * when the server reports it expired. Return null when no user is signed in.
      * Can also be set later with [RiviumPush.setTokenProvider].
      */
-    val tokenProvider: PushTokenProvider? = null
+    val tokenProvider: PushTokenProvider? = null,
+
+    /**
+     * Send the SDK's own error counts to Rivium (default true): per public
+     * [RiviumPushErrorCode] number how often it happened, plus crashes thrown by Rivium Push code, on the next
+     * ordinary API request in the `X-Rivium-SDK-Report` header. Counts only — never a message, stack trace,
+     * user or device detail. False: nothing is counted, kept or sent.
+     */
+    val sendDiagnostics: Boolean = true
 ) {
     // Internal notification channel config - not user-configurable
     internal val notificationChannelId: String = "rivium_push_channel"

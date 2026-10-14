@@ -158,7 +158,8 @@ class RiviumPushService : Service() {
                 notificationIcon = prefs.getString("notificationIcon", null),
                 showServiceNotification = prefs.getBoolean("showServiceNotification", true),
                 wrapperSdkName = prefs.getString("wrapperSdkName", null),
-                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null)
+                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null),
+                sendDiagnostics = prefs.getBoolean("sendDiagnostics", true)
             )
             return restored to savedDevice
         }
@@ -414,6 +415,10 @@ class RiviumPushService : Service() {
         Log.d(TAG, "====== SERVICE CREATED ======")
         Log.d(TAG, "Service instance created")
         Log.d(TAG, "=============================")
+        co.rivium.push.sdk.internal.SdkDiagnostics.attach(
+            this,
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean("sendDiagnostics", true)
+        )
         registerWakeTriggers()
     }
 

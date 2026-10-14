@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - 2026-10-14
+
+### Added
+- `sendDiagnostics` (default `true`): the SDK sends counts of its own errors, by error code, and of crashes in SDK code with its next request. Counts only, no personal data.
+
+### Changed
+- Inside the Flutter or React Native SDK, requests also name the native SDK version.
+
 ## [0.1.17] - 2026-10-10
 
 ### Fixed

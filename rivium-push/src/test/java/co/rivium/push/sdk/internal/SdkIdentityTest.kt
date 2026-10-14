@@ -20,7 +20,7 @@ class SdkIdentityTest {
 
     @Test fun `valid wrapper identity wins`() {
         assertEquals(SdkIdentity("flutter", "0.1.16"), SdkIdentity.resolve("flutter", "0.1.16"))
-        assertEquals("react-native/1.0.0+2", SdkIdentity.resolve("react-native", "1.0.0+2").headerValue)
+        assertEquals("react-native/1.0.0+2 android/${RiviumPush.SDK_VERSION}", SdkIdentity.resolve("react-native", "1.0.0+2").headerValue)
     }
 
     @Test fun `invalid or partial wrapper identity falls back to native`() {

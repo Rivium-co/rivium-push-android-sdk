@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import co.rivium.push.sdk.internal.SdkDiagnostics
 import co.rivium.push.sdk.internal.SdkIdentity
 import co.rivium.push.sdk.internal.UserTokenInterceptor
 import org.json.JSONObject
@@ -27,6 +28,7 @@ class ApiClient(private val config: RiviumPushConfig) {
     private val client = NetworkConfig.createSecureClient().newBuilder()
         .addInterceptor(sdkIdentity.interceptor())
         .addInterceptor(UserTokenInterceptor())
+        .addInterceptor(SdkDiagnostics.interceptor())
         .build()
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()

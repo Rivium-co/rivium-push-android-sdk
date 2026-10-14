@@ -39,7 +39,8 @@ class BootReceiver : BroadcastReceiver() {
                 notificationIcon = prefs.getString("notificationIcon", null),
                 showServiceNotification = prefs.getBoolean("showServiceNotification", true),
                 wrapperSdkName = prefs.getString("wrapperSdkName", null),
-                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null)
+                wrapperSdkVersion = prefs.getString("wrapperSdkVersion", null),
+                sendDiagnostics = prefs.getBoolean("sendDiagnostics", true)
             )
             // Restore internal PN host and JWT token if available
             val pnHost = prefs.getString("pnHost", "") ?: ""

@@ -90,7 +90,7 @@ class ApiClientTest {
         assertEquals(ApiClient.AckResult.SUCCESS, wrapped.reportDeliveredSync("m1", "d1"))
 
         val request = mockWebServer.takeRequest()
-        assertEquals("flutter/0.1.16", request.getHeader("X-Rivium-SDK"))
+        assertEquals("flutter/0.1.16 android/${RiviumPush.SDK_VERSION}", request.getHeader("X-Rivium-SDK"))
         assertTrue(request.body.readUtf8().contains("\"messageId\":\"m1\""))
     }
 

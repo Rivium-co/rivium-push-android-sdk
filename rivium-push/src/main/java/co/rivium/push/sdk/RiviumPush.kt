@@ -33,6 +33,7 @@ import co.rivium.push.sdk.internal.InstallId
 import co.rivium.push.sdk.internal.MqttEndpoints
 import co.rivium.push.sdk.internal.PrefsEndpointStore
 import co.rivium.push.sdk.internal.RegistrationRefreshPolicy
+import co.rivium.push.sdk.internal.SdkDiagnostics
 import co.rivium.push.sdk.internal.SdkIdentity
 import co.rivium.push.sdk.internal.UserTokenSession
 
@@ -106,6 +107,7 @@ object RiviumPush {
     fun init(context: Context, config: RiviumPushConfig) {
         this.context = context.applicationContext
         this.config = config
+        SdkDiagnostics.attach(context, config.sendDiagnostics)
         this.apiClient = ApiClient(config)
         this.deviceId = getOrCreateDeviceId(context)
 
@@ -156,6 +158,7 @@ object RiviumPush {
                 .putBoolean("showServiceNotification", config.showServiceNotification)
                 .putString("wrapperSdkName", config.wrapperSdkName)
                 .putString("wrapperSdkVersion", config.wrapperSdkVersion)
+                .putBoolean("sendDiagnostics", config.sendDiagnostics)
                 // Save appIdentifier (packageName) for boot recovery
                 .putString("appIdentifier", context.packageName)
                 .apply()
@@ -316,6 +319,7 @@ object RiviumPush {
                 override fun onError(error: String) {
                     Log.e(TAG, "Failed to fetch push config: $error")
                     callback?.onError("Failed to fetch push config: $error")
+                    SdkDiagnostics.count(RiviumPushErrorCode.CONFIGURATION_FAILED)
                     callback?.onDetailedError(RiviumPushError(RiviumPushErrorCode.CONFIGURATION_FAILED, error))
                 }
             })
@@ -431,6 +435,7 @@ object RiviumPush {
                 }
                 Log.e(TAG, "Registration failed: $error")
                 callback?.onError(error)
+                SdkDiagnostics.count(RiviumPushErrorCode.REGISTRATION_FAILED)
                 callback?.onDetailedError(RiviumPushError(RiviumPushErrorCode.REGISTRATION_FAILED, error))
             }
         })
@@ -453,6 +458,7 @@ object RiviumPush {
             override fun onError(error: String) {
                 Log.e(TAG, "Failed to subscribe to topic: $error")
                 callback?.onError(error)
+                SdkDiagnostics.count(RiviumPushErrorCode.SUBSCRIPTION_FAILED)
                 callback?.onDetailedError(RiviumPushError(RiviumPushErrorCode.SUBSCRIPTION_FAILED, error))
             }
         })
@@ -475,6 +481,7 @@ object RiviumPush {
             override fun onError(error: String) {
                 Log.e(TAG, "Failed to unsubscribe from topic: $error")
                 callback?.onError(error)
+                SdkDiagnostics.count(RiviumPushErrorCode.UNSUBSCRIPTION_FAILED)
                 callback?.onDetailedError(RiviumPushError(RiviumPushErrorCode.UNSUBSCRIPTION_FAILED, error))
             }
         })

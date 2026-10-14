@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.17")
+    implementation("co.rivium:rivium-push-android:0.1.18")
 }
 ```
 
@@ -219,6 +219,7 @@ val count = RiviumPush.getInboxManager().getUnreadCount()
 | `wrapperSdkName` | String? | null | **Official wrappers only** (e.g. `"flutter"`, `"react-native"`). Reported instead of `android` |
 | `wrapperSdkVersion` | String? | null | **Official wrappers only.** Version reported with `wrapperSdkName` |
 | `tokenProvider` | suspend () -> String? | null | Returns a signed user token from your server. See [Signed user tokens](#signed-user-tokens) |
+| `sendDiagnostics` | Boolean | true | Send counts of the SDK's own errors (by error code, no personal data) with its requests |
 
 The SDK reports its identity to the server (`sdkName`/`sdkVersion` on register and an `X-Rivium-SDK: android/<version>` header on every request). The native version is available as `RiviumPush.SDK_VERSION`. Wrapper values must be at most 32 characters of `A-Za-z0-9._+-` and are ignored unless both are set.
 
@@ -257,7 +258,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.17")
+    implementation("co.rivium:rivium-push-android:0.1.18")
     implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```
