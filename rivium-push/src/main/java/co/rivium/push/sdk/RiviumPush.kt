@@ -146,6 +146,40 @@ object RiviumPush {
             pendingTransportRefresh = false
             scheduleTransportRefresh(context.applicationContext, AUTO_REFRESH_DELAY_MS)
         }
+
+        // setCurrentActivity() can run before init() (e.g. a cross-platform
+        // plugin attaches to the activity first). A notification tap that
+        // launched that activity was skipped then; handle it now so it is
+        // stored for getInitialMessage() and reported as opened.
+        pendingActivity?.let { handleNotificationIntent(it.intent) }
+
+        registerTapWatcher(context.applicationContext)
+    }
+
+    /**
+     * Notification taps are picked up without app code, the way Firebase Messaging does it: every activity that
+     * is created or resumed has its intent checked for a tap (opened receipt, onNotificationTapped,
+     * getInitialMessage). A tap delivered to an activity that is already in front arrives in its onNewIntent();
+     * the activity sees it when it calls setIntent(intent) there, or passes it to handleNotificationIntent().
+     * The tap extra is consumed, so an intent is handled once however often it is seen.
+     */
+    private fun registerTapWatcher(app: Context) {
+        if (tapWatcherRegistered) return
+        val application = app as? android.app.Application ?: return
+        tapWatcherRegistered = true
+        application.registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, savedInstanceState: android.os.Bundle?) {
+                handleNotificationIntent(activity.intent)
+            }
+            override fun onActivityResumed(activity: Activity) {
+                handleNotificationIntent(activity.intent)
+            }
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: android.os.Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
     }
 
     private fun saveConfig(context: Context, config: RiviumPushConfig) {
@@ -615,6 +649,13 @@ object RiviumPush {
         // Consume so onNewIntent re-deliveries (config changes etc.) don't refire.
         intent.removeExtra(NotificationHelper.EXTRA_RIVIUM_NOTIFICATION_TAP)
 
+        // The user opened the notification: report it (off this thread, once per message).
+        RiviumPushService.reportInteraction(
+            ctx,
+            ApiClient.Interaction.OPENED,
+            intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_ID)
+        )
+
         val messageJson = intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_JSON)
         val abTestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_AB_TEST_ID)
         val variantId = intent.getStringExtra(NotificationActionReceiver.EXTRA_VARIANT_ID)
@@ -734,7 +775,36 @@ object RiviumPush {
         cancelDeferredServiceStart()
         ctx.stopService(Intent(ctx, RiviumPushService::class.java))
         saveServiceState(ctx, false)
-        UserTokenSession.manager.clear()
+
+        // Detach the user on the server too (as the iOS SDK does): stopping the
+        // connection alone leaves the install linked to the user, so pushes to
+        // that user would still target this device. Best effort: when offline,
+        // the next registration detaches it (see the auto-refresh).
+        val client = apiClient
+        val devId = deviceId
+        if (currentUserId != null && client != null && devId != null) {
+            currentUserId = null
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_USER_ID)
+                .apply()
+            inboxManager?.setUserId(null)
+            // The request still carries the user's token; it is forgotten afterwards.
+            val tokenMark = UserTokenSession.manager.mark()
+            client.clearUserId(devId, object : ApiClient.ApiCallback<String> {
+                override fun onSuccess(response: String) {
+                    Log.d(TAG, "User detached on unregister")
+                    UserTokenSession.manager.clearIfUnchanged(tokenMark)
+                }
+
+                override fun onError(error: String) {
+                    Log.w(TAG, "Failed to detach user on unregister: $error")
+                    UserTokenSession.manager.clearIfUnchanged(tokenMark)
+                }
+            })
+        } else {
+            UserTokenSession.manager.clear()
+        }
         Log.d(TAG, "Service stopped")
     }
 
@@ -1233,6 +1303,8 @@ object RiviumPush {
     private var inAppMessageManager: InAppMessageManager? = null
     // Store the activity until InAppMessageManager is created
     private var pendingActivity: Activity? = null
+    /** Set once the activity lifecycle watcher for notification taps is registered (see registerTapWatcher). */
+    private var tapWatcherRegistered = false
 
     /**
      * Get the in-app message manager instance

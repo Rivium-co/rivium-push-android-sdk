@@ -46,6 +46,19 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            Opened by notification action buttons (Android 12+ does not let a
+            receiver open the app). Invisible, finishes at once, never in Recents.
+        -->
+        <activity
+            android:name="co.rivium.push.sdk.NotificationActionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:launchMode="standard"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Notification Action Receiver -->
         <receiver
             android:name="co.rivium.push.sdk.NotificationActionReceiver"

@@ -64,11 +64,13 @@ class RiviumPushService : Service() {
         private const val PREFS_NAME = "rivium_push_prefs"
         private const val KEY_ACKED_MESSAGE_IDS = "acked_message_ids"
         private const val KEY_DISPLAYED_MESSAGE_IDS = "displayed_message_ids"
+        private const val KEY_INTERACTION_RECEIPT_IDS = "interaction_receipt_ids"
 
         /** Delays before re-trying a failed ack (in addition to HTTP-level retries). */
         internal val ACK_RETRY_DELAYS_MS = longArrayOf(5_000L, 30_000L, 120_000L)
 
         private var ackTracker: DeliveryAckTracker? = null
+        private var interactionTracker: DeliveryAckTracker? = null
         private var displayTracker: DisplayedMessageTracker? = null
         /** Used to show notifications when the push service is not running (add-on transport). */
         private var fallbackNotificationHelper: NotificationHelper? = null
@@ -239,6 +241,98 @@ class RiviumPushService : Service() {
             }
         }
 
+
+        @Synchronized
+        private fun interactionTracker(context: Context): DeliveryAckTracker {
+            return interactionTracker ?: DeliveryAckTracker().also { t ->
+                try {
+                    t.restore(
+                        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getString(KEY_INTERACTION_RECEIPT_IDS, null)
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to restore interaction receipt ids: ${e.message}")
+                }
+                interactionTracker = t
+            }
+        }
+
+        /**
+         * Tell Rivium Push the user opened (tapped), clicked an action button
+         * of, or dismissed a notification.
+         *
+         * Same contract as [reportDelivered]: off the calling thread, sent once
+         * per message and interaction, retried a few times on transient
+         * failures, never throws and never delays opening the app. No-op when
+         * the message carries no id or the SDK was never configured.
+         */
+        internal fun reportInteraction(
+            context: Context,
+            interaction: ApiClient.Interaction,
+            messageId: String?,
+            actionId: String? = null
+        ) {
+            val id = messageId?.takeIf { it.isNotEmpty() } ?: return
+            try {
+                val appContext = context.applicationContext ?: context
+                co.rivium.push.sdk.internal.UserTokenSession.attach(appContext)
+                val (cfg, device) = ackConfig(appContext) ?: run {
+                    Log.w(TAG, "${interaction.path} receipt skipped: SDK not configured")
+                    return
+                }
+                val tracker = interactionTracker(appContext)
+                val key = "${interaction.path}:$id"
+                if (!tracker.tryClaim(key)) {
+                    Log.d(TAG, "${interaction.path} receipt already sent for $id")
+                    return
+                }
+                sendInteraction(appContext, clientFor(cfg), tracker, interaction, id, key, device, actionId, attempt = 0)
+            } catch (e: Exception) {
+                Log.w(TAG, "${interaction.path} receipt failed: ${e.message}")
+            }
+        }
+
+        private fun sendInteraction(
+            context: Context,
+            client: ApiClient,
+            tracker: DeliveryAckTracker,
+            interaction: ApiClient.Interaction,
+            messageId: String,
+            key: String,
+            device: String,
+            actionId: String?,
+            attempt: Int
+        ) {
+            RiviumPushExecutors.executeNetwork {
+                val result = try {
+                    client.reportInteractionSync(interaction, messageId, device, actionId)
+                } catch (e: Exception) {
+                    ApiClient.AckResult.RETRYABLE
+                }
+                when {
+                    result == ApiClient.AckResult.SUCCESS -> {
+                        tracker.markAcked(key)
+                        val serialized = tracker.serialize()
+                        RiviumPushExecutors.executeIO {
+                            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                                .edit()
+                                .putString(KEY_INTERACTION_RECEIPT_IDS, serialized)
+                                .apply()
+                        }
+                    }
+                    result == ApiClient.AckResult.RETRYABLE && attempt < ACK_RETRY_DELAYS_MS.size -> {
+                        val delay = ACK_RETRY_DELAYS_MS[attempt]
+                        RiviumPushExecutors.scheduleBackground(delay) {
+                            sendInteraction(context, client, tracker, interaction, messageId, key, device, actionId, attempt + 1)
+                        }
+                    }
+                    else -> {
+                        Log.w(TAG, "${interaction.path} receipt for $messageId gave up ($result)")
+                        tracker.release(key)
+                    }
+                }
+            }
+        }
 
         /**
          * Handle a message payload from any transport ("pn" or an add-on such as

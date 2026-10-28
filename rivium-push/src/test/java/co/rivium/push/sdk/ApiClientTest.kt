@@ -861,4 +861,90 @@ class ApiClientTest {
         assertTrue(cleared.has("fcmToken"))
         assertTrue(cleared.isNull("fcmToken"))
     }
+
+    // ==================== Topic path encoding ====================
+
+    @Test
+    fun `topic url encodes the topic as one path segment`() {
+        val url = apiClient.topicUrl("device 1", "sports/news & more?x#y")
+        assertEquals(
+            "/devices/device%201/topics/sports%2Fnews%20&%20more%3Fx%23y",
+            url.encodedPath
+        )
+        assertEquals("sports/news & more?x#y", url.pathSegments.last())
+        assertNull(url.query)
+    }
+
+    @Test
+    fun `subscribe and unsubscribe send the encoded topic`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        fun callback(latch: CountDownLatch) = object : ApiClient.ApiCallback<String> {
+            override fun onSuccess(response: String) { latch.countDown() }
+            override fun onError(error: String) { latch.countDown() }
+        }
+        val subscribed = CountDownLatch(1)
+        apiClient.subscribeTopic("device123", "a b/c", callback(subscribed))
+        assertTrue(awaitWithLooper(subscribed))
+        val first = mockWebServer.takeRequest()
+
+        val unsubscribed = CountDownLatch(1)
+        apiClient.unsubscribeTopic("device123", "a b/c", callback(unsubscribed))
+        assertTrue(awaitWithLooper(unsubscribed))
+        val second = mockWebServer.takeRequest()
+        assertEquals("POST", first.method)
+        assertEquals("/devices/device123/topics/a%20b%2Fc", first.path)
+        assertEquals("DELETE", second.method)
+        assertEquals("/devices/device123/topics/a%20b%2Fc", second.path)
+    }
+
+    // ==================== Interaction receipts ====================
+
+    @Test
+    fun `opened receipt posts messageId and deviceId with the api key`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"success\":true}"))
+        assertEquals(
+            ApiClient.AckResult.SUCCESS,
+            apiClient.reportInteractionSync(ApiClient.Interaction.OPENED, "m1", "d1", actionId = "ignored")
+        )
+        val request = mockWebServer.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/receipts/opened", request.path)
+        assertEquals("test_api_key", request.getHeader("x-api-key"))
+        val body = org.json.JSONObject(request.body.readUtf8())
+        assertEquals("m1", body.getString("messageId"))
+        assertEquals("d1", body.getString("deviceId"))
+        assertFalse("actionId belongs to clicked receipts only", body.has("actionId"))
+    }
+
+    @Test
+    fun `clicked receipt carries the action id`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        apiClient.reportInteractionSync(ApiClient.Interaction.CLICKED, "m1", "d1", "reply")
+        val request = mockWebServer.takeRequest()
+        assertEquals("/receipts/clicked", request.path)
+        assertEquals("reply", org.json.JSONObject(request.body.readUtf8()).getString("actionId"))
+    }
+
+    @Test
+    fun `clicked receipt without an action id omits it`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        apiClient.reportInteractionSync(ApiClient.Interaction.CLICKED, "m1", "d1", null)
+        val body = org.json.JSONObject(mockWebServer.takeRequest().body.readUtf8())
+        assertFalse(body.has("actionId"))
+    }
+
+    @Test
+    fun `dismissed receipt goes to its own endpoint`() {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        apiClient.reportInteractionSync(ApiClient.Interaction.DISMISSED, "m1", "d1")
+        assertEquals("/receipts/dismissed", mockWebServer.takeRequest().path)
+    }
+
+    @Test
+    fun `interaction receipts classify failures like delivery acks`() {
+        // 5xx / 429 are retried by the HTTP layer first; a 404 (unknown message) is final.
+        mockWebServer.enqueue(MockResponse().setResponseCode(404))
+        assertEquals(ApiClient.AckResult.PERMANENT_FAILURE, apiClient.reportInteractionSync(ApiClient.Interaction.OPENED, "m1", "d1"))
+    }
 }

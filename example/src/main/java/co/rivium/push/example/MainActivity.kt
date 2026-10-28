@@ -72,7 +72,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        intent?.let { handleIntent(it) }
+        // A notification tapped while this activity is in front arrives here: make it the activity's intent so the
+        // SDK sees the tap when the activity resumes (opened receipt, onNotificationTapped).
+        intent?.let {
+            setIntent(it)
+            handleIntent(it)
+        }
     }
 
     override fun onResume() {

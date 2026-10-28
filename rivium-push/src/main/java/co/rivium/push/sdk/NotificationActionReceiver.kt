@@ -17,7 +17,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * BroadcastReceiver that handles notification action button clicks.
+ * BroadcastReceiver for notification events that do not open an activity
+ * (the user dismissing a notification), and for action-button taps on
+ * notifications posted by older SDK versions. Current action buttons open
+ * [NotificationActionActivity] directly, which Android 12+ requires.
  * Automatically tracks A/B test clicks when notifications contain abTestId/variantId.
  */
 class NotificationActionReceiver : BroadcastReceiver() {
@@ -36,140 +39,148 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 .addInterceptor(co.rivium.push.sdk.internal.UserTokenInterceptor())
                 .build()
         }
-    }
 
-    /**
-     * Check if the deep link is a valid URI with a scheme (like myapp:// or https://)
-     */
-    private fun isValidDeepLink(deepLink: String?): Boolean {
-        if (deepLink.isNullOrBlank()) return false
-        return try {
-            val uri = Uri.parse(deepLink)
-            // Must have a scheme (like myapp://, https://, etc.)
-            !uri.scheme.isNullOrBlank()
-        } catch (e: Exception) {
-            false
-        }
-    }
+        /** Action of the delete intent: the user swiped the notification away. */
+        const val ACTION_NOTIFICATION_DISMISSED = "co.rivium.push.NOTIFICATION_DISMISSED"
 
-    /**
-     * Create the intent to launch when action button is clicked
-     */
-    private fun createLaunchIntent(
-        context: Context,
-        deepLink: String?,
-        actionId: String?,
-        messageId: String?
-    ): Intent? {
-        return if (isValidDeepLink(deepLink)) {
-            // Deep link with valid URI scheme - try to open it
-            Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(NotificationHelper.EXTRA_ACTION_ID, actionId)
-                putExtra(NotificationHelper.EXTRA_MESSAGE_ID, messageId)
-            }
-        } else {
-            // No valid deep link or just a plain value - launch main activity
-            // Store the action value for the app to handle
-            context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(NotificationHelper.EXTRA_ACTION_ID, actionId)
-                putExtra(NotificationHelper.EXTRA_MESSAGE_ID, messageId)
-                // Pass the action value (could be anything like "125", "reply", etc.)
-                putExtra(NotificationHelper.EXTRA_DEEP_LINK, deepLink)
-            }
-        }
-    }
-
-    /**
-     * Track A/B test click event if this notification is part of an A/B test.
-     * Uses ABTestingManager if available, otherwise makes direct API call.
-     */
-    private fun trackABTestClick(context: Context, abTestId: String?, variantId: String?) {
-        if (abTestId.isNullOrBlank() || variantId.isNullOrBlank()) {
-            Log.d(TAG, "No A/B test data - skipping click tracking")
-            return
-        }
-
-        Log.d(TAG, "Tracking A/B test click: testId=$abTestId, variantId=$variantId")
-
-        // Track click in background
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // Try using ABTestingManager first (if SDK is initialized)
-                val manager = ABTestingManager.getInstance()
-                if (manager != null) {
-                    Log.d(TAG, "Using ABTestingManager to track click")
-                    manager.trackClicked(abTestId, variantId,
-                        onSuccess = { Log.d(TAG, "A/B test click tracked via manager") },
-                        onError = { error -> Log.e(TAG, "Manager tracking failed: $error, trying direct API")
-                            // Fallback to direct API call
-                            trackClickDirectly(context, abTestId, variantId)
-                        }
-                    )
-                } else {
-                    // SDK not initialized - make direct API call
-                    Log.d(TAG, "ABTestingManager not available, using direct API call")
-                    trackClickDirectly(context, abTestId, variantId)
-                }
+        /**
+         * Check if the deep link is a valid URI with a scheme (like myapp:// or https://)
+         */
+        private fun isValidDeepLink(deepLink: String?): Boolean {
+            if (deepLink.isNullOrBlank()) return false
+            return try {
+                val uri = Uri.parse(deepLink)
+                // Must have a scheme (like myapp://, https://, etc.)
+                !uri.scheme.isNullOrBlank()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to track A/B test click: ${e.message}")
-                // Try direct API as last resort
-                trackClickDirectly(context, abTestId, variantId)
+                false
             }
         }
-    }
 
-    /**
-     * Make direct API call to track click (used when SDK not fully initialized)
-     */
-    private fun trackClickDirectly(context: Context, abTestId: String, variantId: String) {
-        try {
-            // The process may have been started for this broadcast, before init().
-            co.rivium.push.sdk.internal.UserTokenSession.attach(context)
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val apiKey = prefs.getString("apiKey", null)
-            val deviceId = prefs.getString("device_id", null)
+        /**
+         * Create the intent to launch when action button is clicked
+         */
+        private fun createLaunchIntent(
+            context: Context,
+            deepLink: String?,
+            actionId: String?,
+            messageId: String?
+        ): Intent? {
+            return if (isValidDeepLink(deepLink)) {
+                // Deep link with valid URI scheme - try to open it
+                Intent(Intent.ACTION_VIEW, Uri.parse(deepLink)).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(NotificationHelper.EXTRA_ACTION_ID, actionId)
+                    putExtra(NotificationHelper.EXTRA_MESSAGE_ID, messageId)
+                }
+            } else {
+                // No valid deep link or just a plain value - launch main activity
+                // Store the action value for the app to handle
+                context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(NotificationHelper.EXTRA_ACTION_ID, actionId)
+                    putExtra(NotificationHelper.EXTRA_MESSAGE_ID, messageId)
+                    // Pass the action value (could be anything like "125", "reply", etc.)
+                    putExtra(NotificationHelper.EXTRA_DEEP_LINK, deepLink)
+                }
+            }
+        }
 
-            if (apiKey.isNullOrBlank() || deviceId.isNullOrBlank()) {
-                Log.e(TAG, "Cannot track click - missing apiKey or deviceId")
+        /**
+         * Track A/B test click event if this notification is part of an A/B test.
+         * Uses ABTestingManager if available, otherwise makes direct API call.
+         */
+        private fun trackABTestClick(context: Context, abTestId: String?, variantId: String?) {
+            if (abTestId.isNullOrBlank() || variantId.isNullOrBlank()) {
+                Log.d(TAG, "No A/B test data - skipping click tracking")
                 return
             }
 
-            Log.d(TAG, "Direct API call: apiKey=${apiKey.take(10)}..., deviceId=$deviceId")
+            Log.d(TAG, "Tracking A/B test click: testId=$abTestId, variantId=$variantId")
 
-            val json = JSONObject().apply {
-                put("testId", abTestId)
-                put("variantId", variantId)
-                put("deviceId", deviceId)
-            }
-
-            val body = json.toString().toRequestBody("application/json".toMediaType())
-            val request = Request.Builder()
-                .url("${RiviumPushConfig.SERVER_URL}/ab-tests/sdk/track/clicked")
-                .addHeader("x-api-key", apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(body)
-                .build()
-
-            val response = httpClient.newCall(request).execute()
-            response.use {
-                if (it.isSuccessful) {
-                    Log.d(TAG, "A/B test click tracked successfully via direct API")
-                } else {
-                    Log.e(TAG, "Direct API track failed: ${it.code} - ${it.body?.string()}")
+            // Track click in background
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    // Try using ABTestingManager first (if SDK is initialized)
+                    val manager = ABTestingManager.getInstance()
+                    if (manager != null) {
+                        Log.d(TAG, "Using ABTestingManager to track click")
+                        manager.trackClicked(abTestId, variantId,
+                            onSuccess = { Log.d(TAG, "A/B test click tracked via manager") },
+                            onError = { error -> Log.e(TAG, "Manager tracking failed: $error, trying direct API")
+                                // Fallback to direct API call
+                                trackClickDirectly(context, abTestId, variantId)
+                            }
+                        )
+                    } else {
+                        // SDK not initialized - make direct API call
+                        Log.d(TAG, "ABTestingManager not available, using direct API call")
+                        trackClickDirectly(context, abTestId, variantId)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to track A/B test click: ${e.message}")
+                    // Try direct API as last resort
+                    trackClickDirectly(context, abTestId, variantId)
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Direct API call failed: ${e.message}")
         }
-    }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        Log.d(TAG, "====== NOTIFICATION/ACTION CLICKED ======")
-        Log.d(TAG, "Action: ${intent.action}")
+        /**
+         * Make direct API call to track click (used when SDK not fully initialized)
+         */
+        private fun trackClickDirectly(context: Context, abTestId: String, variantId: String) {
+            try {
+                // The process may have been started for this broadcast, before init().
+                co.rivium.push.sdk.internal.UserTokenSession.attach(context)
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val apiKey = prefs.getString("apiKey", null)
+                val deviceId = prefs.getString("device_id", null)
 
-        if (intent.action == NotificationHelper.ACTION_BUTTON_CLICKED) {
+                if (apiKey.isNullOrBlank() || deviceId.isNullOrBlank()) {
+                    Log.e(TAG, "Cannot track click - missing apiKey or deviceId")
+                    return
+                }
+
+                Log.d(TAG, "Direct API call: apiKey=${apiKey.take(10)}..., deviceId=$deviceId")
+
+                val json = JSONObject().apply {
+                    put("testId", abTestId)
+                    put("variantId", variantId)
+                    put("deviceId", deviceId)
+                }
+
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("${RiviumPushConfig.SERVER_URL}/ab-tests/sdk/track/clicked")
+                    .addHeader("x-api-key", apiKey)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body)
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+                response.use {
+                    if (it.isSuccessful) {
+                        Log.d(TAG, "A/B test click tracked successfully via direct API")
+                    } else {
+                        Log.e(TAG, "Direct API track failed: ${it.code} - ${it.body?.string()}")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct API call failed: ${e.message}")
+            }
+        }
+
+        /**
+         * Everything an action-button tap (or a legacy body tap) does: A/B
+         * click tracking, the opened / clicked receipt, the app callback or the
+         * stored state for getInitialMessage() / getClickedAction(), opening
+         * the app or deep link via [launch], and dismissing the notification.
+         *
+         * Shared by [NotificationActionActivity] (current notifications, works
+         * on Android 12+) and this receiver (notifications posted by older SDK
+         * versions that are still in the shade after an update).
+         */
+        internal fun handleTap(context: Context, intent: Intent, launch: (Intent) -> Unit) {
             val actionId = intent.getStringExtra(NotificationHelper.EXTRA_ACTION_ID)
             val messageId = intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_ID)
             val deepLink = intent.getStringExtra(NotificationHelper.EXTRA_DEEP_LINK)
@@ -189,6 +200,13 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
             // Track A/B test click if this is an A/B test notification
             trackABTestClick(context, abTestId, variantId)
+
+            // Opened / clicked receipt: off this thread, never delays the launch.
+            if (isMainNotificationTap) {
+                RiviumPushService.reportInteraction(context, ApiClient.Interaction.OPENED, messageId)
+            } else {
+                RiviumPushService.reportInteraction(context, ApiClient.Interaction.CLICKED, messageId, actionId)
+            }
 
             // Handle initial message storage and callback notification
             if (isMainNotificationTap && !messageJson.isNullOrBlank()) {
@@ -276,7 +294,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
             launchIntent?.let {
                 try {
-                    context.startActivity(it)
+                    launch(it)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to launch activity: ${e.message}")
                     // Fallback to main activity
@@ -286,7 +304,13 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         putExtra(NotificationHelper.EXTRA_MESSAGE_ID, messageId)
                         putExtra(NotificationHelper.EXTRA_DEEP_LINK, deepLink)
                     }
-                    fallbackIntent?.let { context.startActivity(it) }
+                    fallbackIntent?.let { fallback ->
+                        try {
+                            launch(fallback)
+                        } catch (e2: Exception) {
+                            Log.e(TAG, "Failed to launch the app: ${e2.message}")
+                        }
+                    }
                 }
             }
 
@@ -301,7 +325,19 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 }
             }
 
-            Log.d(TAG, "==========================================")
+        }
+    }
+
+    override fun onReceive(context: Context, intent: Intent) {
+        Log.d(TAG, "Action: ${intent.action}")
+
+        when (intent.action) {
+            NotificationHelper.ACTION_BUTTON_CLICKED -> handleTap(context, intent) { context.startActivity(it) }
+            ACTION_NOTIFICATION_DISMISSED -> RiviumPushService.reportInteraction(
+                context,
+                ApiClient.Interaction.DISMISSED,
+                intent.getStringExtra(NotificationHelper.EXTRA_MESSAGE_ID)
+            )
         }
     }
 }

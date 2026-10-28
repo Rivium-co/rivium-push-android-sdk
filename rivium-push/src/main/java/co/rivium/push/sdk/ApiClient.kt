@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import com.google.gson.Gson
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import co.rivium.push.sdk.internal.SdkDiagnostics
@@ -179,11 +180,24 @@ class ApiClient(private val config: RiviumPushConfig) {
     }
 
     /**
+     * `/devices/{deviceId}/topics/{topic}` with both ids percent-encoded as
+     * single path segments, so a topic containing spaces, `/`, `?` or `#`
+     * reaches the server unchanged instead of altering the path.
+     */
+    internal fun topicUrl(deviceId: String, topic: String): HttpUrl =
+        RiviumPushConfig.SERVER_URL.toHttpUrl().newBuilder()
+            .addPathSegment("devices")
+            .addPathSegment(deviceId)
+            .addPathSegment("topics")
+            .addPathSegment(topic)
+            .build()
+
+    /**
      * Subscribe to a topic.
      */
     fun subscribeTopic(deviceId: String, topic: String, callback: ApiCallback<String>) {
         val httpRequest = Request.Builder()
-            .url("${RiviumPushConfig.SERVER_URL}/devices/$deviceId/topics/$topic")
+            .url(topicUrl(deviceId, topic))
             .addHeader("x-api-key", config.apiKey)
             .post("".toRequestBody(null))
             .build()
@@ -222,7 +236,7 @@ class ApiClient(private val config: RiviumPushConfig) {
      */
     fun unsubscribeTopic(deviceId: String, topic: String, callback: ApiCallback<String>) {
         val httpRequest = Request.Builder()
-            .url("${RiviumPushConfig.SERVER_URL}/devices/$deviceId/topics/$topic")
+            .url(topicUrl(deviceId, topic))
             .addHeader("x-api-key", config.apiKey)
             .delete()
             .build()
@@ -669,6 +683,64 @@ class ApiClient(private val config: RiviumPushConfig) {
         }
         return Request.Builder()
             .url("${RiviumPushConfig.SERVER_URL}/receipts/delivered")
+            .addHeader("x-api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+    }
+
+    /** A user interaction with a shown notification, reported to Rivium Push. */
+    internal enum class Interaction(val path: String) {
+        /** The user tapped the notification body. */
+        OPENED("opened"),
+        /** The user tapped an action button. */
+        CLICKED("clicked"),
+        /** The user swiped the notification away. */
+        DISMISSED("dismissed")
+    }
+
+    /**
+     * Report an interaction with a notification (call from a background
+     * thread). Same headers as the delivery ack; the server endpoints are
+     * idempotent, so retrying a [AckResult.RETRYABLE] result is safe.
+     * [actionId] is sent only for [Interaction.CLICKED].
+     */
+    internal fun reportInteractionSync(
+        interaction: Interaction,
+        messageId: String,
+        deviceId: String,
+        actionId: String? = null
+    ): AckResult {
+        return try {
+            client.newCall(buildInteractionRequest(interaction, messageId, deviceId, actionId)).execute().use {
+                when {
+                    it.isSuccessful -> AckResult.SUCCESS
+                    it.code == 408 || it.code == 429 || it.code >= 500 -> AckResult.RETRYABLE
+                    else -> {
+                        Log.w(TAG, "${interaction.path} receipt rejected: ${it.code}")
+                        AckResult.PERMANENT_FAILURE
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "${interaction.path} receipt failed: ${e.message}")
+            AckResult.RETRYABLE
+        }
+    }
+
+    internal fun buildInteractionRequest(
+        interaction: Interaction,
+        messageId: String,
+        deviceId: String,
+        actionId: String?
+    ): Request {
+        val payload = JSONObject().apply {
+            put("messageId", messageId)
+            put("deviceId", deviceId)
+            if (interaction == Interaction.CLICKED && !actionId.isNullOrEmpty()) put("actionId", actionId)
+        }
+        return Request.Builder()
+            .url("${RiviumPushConfig.SERVER_URL}/receipts/${interaction.path}")
             .addHeader("x-api-key", config.apiKey)
             .addHeader("Content-Type", "application/json")
             .post(payload.toString().toRequestBody(jsonMediaType))

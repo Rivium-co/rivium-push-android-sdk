@@ -252,6 +252,23 @@ class NotificationHelper(
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
 
+        // Report a swipe-away as `dismissed`. Android sends this only when the
+        // user clears the notification, never for a tap or an app cancel().
+        message.messageId?.takeIf { it.isNotEmpty() }?.let { id ->
+            val dismissIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                action = NotificationActionReceiver.ACTION_NOTIFICATION_DISMISSED
+                putExtra(EXTRA_MESSAGE_ID, id)
+            }
+            builder.setDeleteIntent(
+                PendingIntent.getBroadcast(
+                    context,
+                    currentNotificationId * 10 + 9,
+                    dismissIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+        }
+
         // Set priority
         val priority = when (message.priority) {
             "high" -> NotificationCompat.PRIORITY_HIGH
@@ -279,8 +296,13 @@ class NotificationHelper(
 
         // Add action buttons (max 3)
         message.actions?.take(3)?.forEachIndexed { index, action ->
-            val actionIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            // Opens an activity directly: Android 12+ blocks a receiver started
+            // by a notification from opening the app (notification trampoline).
+            val actionIntent = Intent(context, NotificationActionActivity::class.java).apply {
                 this.action = ACTION_BUTTON_CLICKED
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                 putExtra(EXTRA_ACTION_ID, action.id)
                 putExtra(EXTRA_MESSAGE_ID, message.messageId)
                 putExtra(EXTRA_DEEP_LINK, action.action ?: message.deepLink)
@@ -294,7 +316,7 @@ class NotificationHelper(
                 message.data?.get("variantId")?.toString()?.let { putExtra(NotificationActionReceiver.EXTRA_VARIANT_ID, it) }
             }
 
-            val actionPendingIntent = PendingIntent.getBroadcast(
+            val actionPendingIntent = PendingIntent.getActivity(
                 context,
                 currentNotificationId * 10 + index,
                 actionIntent,

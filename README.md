@@ -23,7 +23,7 @@ Add the dependency to your app's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.18")
+    implementation("co.rivium:rivium-push-android:0.1.19")
 }
 ```
 
@@ -108,6 +108,16 @@ val initialMessage = RiviumPush.getInitialMessage()
 if (initialMessage != null) {
     Log.d("Push", "Opened from notification: ${initialMessage.title}")
     RiviumPush.clearInitialMessage()
+}
+```
+
+Taps are picked up by the SDK on its own. If your activity is `singleTop` (or otherwise already in front when a
+notification is tapped), the tap arrives in `onNewIntent` — pass it on there:
+
+```kotlin
+override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
 }
 ```
 
@@ -258,7 +268,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 
 ```kotlin
 dependencies {
-    implementation("co.rivium:rivium-push-android:0.1.18")
+    implementation("co.rivium:rivium-push-android:0.1.19")
     implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
 }
 ```

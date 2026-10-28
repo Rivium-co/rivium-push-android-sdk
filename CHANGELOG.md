@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-10-28
+
+### Added
+- Opened, clicked and dismissed tracking: tapping a notification reports it as `opened`, tapping an action button as `clicked` (with the action's id), and swiping it away as `dismissed`. Sent in the background once per message, retried briefly when offline; opening the app never waits for it. Taps are picked up automatically for every activity that is created or resumed; an activity already in front gets the tap in `onNewIntent` — call `setIntent(intent)` there.
+
+### Fixed
+- Action buttons now open the app (or the action's link) on Android 12 and later, where the system blocked them. Action callbacks, `getClickedAction()` and A/B click tracking work as before.
+- Topic names with spaces, `/` or other special characters are sent correctly in `subscribeTopic()` / `unsubscribeTopic()`.
+- `unregister()` now also detaches the signed-in user from this device on the server (as on iOS), so pushes to that user no longer target the device. `getUserId()` returns `null` afterwards.
+- A notification tap that launched the app before `init()` ran is now handled once `init()` runs, so `getInitialMessage()` returns it.
+
 ## [0.1.18] - 2026-10-14
 
 ### Added
