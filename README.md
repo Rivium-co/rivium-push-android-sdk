@@ -269,7 +269,7 @@ For incoming call UI, add the [VoIP SDK](https://github.com/Rivium-co/rivium-pus
 ```kotlin
 dependencies {
     implementation("co.rivium:rivium-push-android:0.1.19")
-    implementation("co.rivium:rivium-push-voip:0.1.0")  // Optional
+    implementation("co.rivium:rivium-push-voip:0.1.1")  // Optional
 }
 ```
 
